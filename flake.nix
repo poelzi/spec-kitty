@@ -2,7 +2,7 @@
   description = "Spec Kitty - Specification Driven Development for AI agents";
 
   inputs = {
-    nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
+    nixpkgs.url = "github:NixOS/nixpkgs/nixos-25.11";
     flake-utils.url = "github:numtide/flake-utils";
   };
 
@@ -17,6 +17,50 @@
       pyproject = builtins.fromTOML (builtins.readFile ./pyproject.toml);
       version = pyproject.project.version;
 
+      # Filter source to only include files needed for building and testing
+      sourceFilter =
+        path: type:
+        let
+          baseName = builtins.baseNameOf path;
+          relPath = nixpkgs.lib.removePrefix (toString self + "/") (toString path);
+        in
+        # Always include directories so filtering can recurse into them
+        type == "directory"
+        || relPath == "pyproject.toml"
+        || relPath == "README.md"
+        || relPath == "LICENSE"
+        || relPath == "CHANGELOG.md"
+        || relPath == "pytest.ini"
+        || nixpkgs.lib.hasPrefix "src/" relPath
+        || nixpkgs.lib.hasPrefix "tests/" relPath
+        || nixpkgs.lib.hasPrefix "scripts/" relPath
+        || nixpkgs.lib.hasPrefix "examples/" relPath;
+
+      filteredSource = builtins.path {
+        path = self;
+        name = "spec-kitty-source";
+        filter = sourceFilter;
+      };
+
+      # Runtime Python dependencies shared between package and devShell
+      runtimePythonDeps = ps: [
+        ps.httpx
+        ps.packaging
+        ps.platformdirs
+        ps.psutil
+        ps.pydantic
+        ps.pyyaml
+        ps.readchar
+        ps.rich
+        ps.ruamel-yaml
+        ps.socksio
+        ps.truststore
+        ps.typer
+        ps.python-ulid
+        ps.websockets
+        ps.toml
+      ];
+
       # Package builder function that can be used in overlay
       mkSpecKitty =
         {
@@ -24,40 +68,14 @@
           python3Packages ? pkgs.python3Packages,
         }:
         let
-          # Override truststore to use version compatible with spec-kitty (>=0.10.4)
-          truststore-compat = python3Packages.truststore.overridePythonAttrs (old: rec {
-            version = "0.10.4";
-            src = pkgs.fetchPypi {
-              pname = "truststore";
-              inherit version;
-              sha256 = "00f3xc7720rkddsn291yrw871kfnimi6d9xbwi75xbb3ci1vv4cx";
-            };
-          });
-
-          pythonEnv = python3Packages.python.withPackages (ps: [
-            ps.httpx
-            ps.packaging
-            ps.platformdirs
-            ps.psutil
-            ps.pydantic
-            ps.pyyaml
-            ps.readchar
-            ps.rich
-            ps.ruamel-yaml
-            ps.socksio
-            truststore-compat
-            ps.typer
-            # Test dependencies
-            ps.pytest
-            ps.build
-          ]);
+          pythonEnv = python3Packages.python.withPackages (ps: runtimePythonDeps ps);
         in
         python3Packages.buildPythonApplication rec {
           pname = "spec-kitty";
           inherit version;
           format = "pyproject";
 
-          src = self;
+          src = filteredSource;
 
           nativeBuildInputs = with python3Packages; [
             hatchling
@@ -65,23 +83,11 @@
             pkgs.makeWrapper
           ];
 
-          propagatedBuildInputs = with python3Packages; [
-            httpx
-            packaging
-            platformdirs
-            psutil
-            pydantic
-            pyyaml
-            readchar
-            rich
-            ruamel-yaml
-            socksio
-            truststore-compat
-            typer
-          ];
+          propagatedBuildInputs = runtimePythonDeps python3Packages;
 
           nativeCheckInputs = with python3Packages; [
             pytest
+            pytest-asyncio
             build
             pkgs.git
             pkgs.coreutils
@@ -164,6 +170,11 @@
                     --replace-quiet "from specify_cli" "''${pathSetup}from specify_cli"
                 fi
               done
+
+              # Install examples into doc directory
+              local docDir="$out/share/doc/${pname}"
+              mkdir -p "$docDir/examples"
+              cp -r ${filteredSource}/examples/* "$docDir/examples/"
             '';
 
           # Enable the test suite
@@ -201,7 +212,8 @@
             export SPEC_KITTY_TEST_VENV="$PWD/$VENV_DIR"
 
             # Add src to PYTHONPATH so 'python -m specify_cli' works
-            export PYTHONPATH="$PWD/src:$PYTHONPATH"
+            # Also add scripts/tasks for acceptance_support and task_helpers imports
+            export PYTHONPATH="$PWD/src:$PWD/src/specify_cli/scripts/tasks:$PYTHONPATH"
 
             # Run pytest, skipping tests that require network, wheel installation, or CLI in PATH
             pytest tests/ \
@@ -398,18 +410,32 @@
           spec-kitty = spec-kitty;
         };
 
-        devShells.default = pkgs.mkShell {
-          packages = [
-            spec-kitty
-            pkgs.python3
-            pkgs.git
-          ];
+        devShells.default =
+          let
+            pythonEnv = pkgs.python3.withPackages (
+              ps:
+              runtimePythonDeps ps
+              ++ [
+                # Dev/test dependencies
+                ps.pytest
+                ps.pytest-asyncio
+                ps.build
+                ps.hatchling
+              ]
+            );
+          in
+          pkgs.mkShell {
+            packages = [
+              pythonEnv
+              pkgs.git
+            ];
 
-          shellHook = ''
-            echo "spec-kitty development shell"
-            echo "Run 'spec-kitty --version' to verify installation"
-          '';
-        };
+            shellHook = ''
+              export PYTHONPATH="$PWD/src:$PYTHONPATH"
+              echo "spec-kitty development shell"
+              echo "Run 'pytest tests/' to run the test suite"
+            '';
+          };
 
         # Allow running directly with 'nix run'
         apps.default = {
