@@ -116,12 +116,12 @@
 **Estimated Prompt Size**: ~470 lines
 
 ### Included Subtasks
-- [ ] T018 Implement deterministic packaging mode selector (`single_wp`, `orchestration`, `targeted_multi`) from coupling/dependency indicators
-- [ ] T019 Implement WP ID allocation and slugged filename generation in flat `tasks/` directories
-- [ ] T020 Emit required frontmatter fields (`change_stack`, `change_request_id`, `change_mode`, `stack_rank`, `review_attention`)
-- [ ] T021 Carry forward guardrails and append mandatory final testing task to each generated change WP (`FR-014`)
-- [ ] T022 Include correct implementation command hints (`spec-kitty implement WP##` with optional `--base`)
-- [ ] T023 Add unit tests for packaging mode outputs, deterministic ordering, and metadata completeness
+- [x] T018 Implement deterministic packaging mode selector (`single_wp`, `orchestration`, `targeted_multi`) from coupling/dependency indicators
+- [x] T019 Implement WP ID allocation and slugged filename generation in flat `tasks/` directories
+- [x] T020 Emit required frontmatter fields (`change_stack`, `change_request_id`, `change_mode`, `stack_rank`, `review_attention`)
+- [x] T021 Carry forward guardrails and append mandatory final testing task to each generated change WP (`FR-014`)
+- [x] T022 Include correct implementation command hints (`spec-kitty implement WP##` with optional `--base`)
+- [x] T023 Add unit tests for packaging mode outputs, deterministic ordering, and metadata completeness
 
 ### Implementation Notes
 - Generated files must stay in flat `tasks/` directories.
