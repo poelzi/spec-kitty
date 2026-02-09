@@ -27,12 +27,12 @@
 **Estimated Prompt Size**: ~360 lines
 
 ### Included Subtasks
-- [ ] T001 Create `src/specify_cli/cli/commands/change.py` with top-level command entrypoints and JSON/human output modes
-- [ ] T002 Register command in `src/specify_cli/cli/commands/__init__.py` and add agent command wiring in `src/specify_cli/cli/commands/agent/__init__.py`
-- [ ] T003 Create `src/specify_cli/cli/commands/agent/change.py` with preview/apply/reconcile command stubs
-- [ ] T004 Add shared command templates at `src/specify_cli/templates/command-templates/change.md` and mission override at `src/specify_cli/missions/software-dev/command-templates/change.md`
-- [ ] T005 Update command discovery/help references where workflow command lists are enumerated
-- [ ] T006 Run command registration smoke tests and verify `/spec-kitty.change` appears in rendered command assets
+- [x] T001 Create `src/specify_cli/cli/commands/change.py` with top-level command entrypoints and JSON/human output modes
+- [x] T002 Register command in `src/specify_cli/cli/commands/__init__.py` and add agent command wiring in `src/specify_cli/cli/commands/agent/__init__.py`
+- [x] T003 Create `src/specify_cli/cli/commands/agent/change.py` with preview/apply/reconcile command stubs
+- [x] T004 Add shared command templates at `src/specify_cli/templates/command-templates/change.md` and mission override at `src/specify_cli/missions/software-dev/command-templates/change.md`
+- [x] T005 Update command discovery/help references where workflow command lists are enumerated
+- [x] T006 Run command registration smoke tests and verify `/spec-kitty.change` appears in rendered command assets
 
 ### Implementation Notes
 - Keep command style aligned with existing Typer command patterns.
