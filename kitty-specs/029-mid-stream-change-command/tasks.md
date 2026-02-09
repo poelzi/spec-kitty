@@ -146,12 +146,12 @@
 **Estimated Prompt Size**: ~410 lines
 
 ### Included Subtasks
-- [ ] T024 Implement dependency candidate extraction across new change WPs and affected open WPs
-- [ ] T025 Implement rule allowing change WPs to depend on normal open WPs when ordering requires (`FR-005A`)
-- [ ] T026 Validate dependency graph using existing core validators (missing refs, self-edge, cycles)
-- [ ] T027 Implement closed/done WP reference linkage metadata without lane mutation
-- [ ] T028 Implement blocker output when pending change stack has no ready WP (`FR-017`)
-- [ ] T029 Add unit tests covering valid and invalid dependency configurations
+- [x] T024 Implement dependency candidate extraction across new change WPs and affected open WPs
+- [x] T025 Implement rule allowing change WPs to depend on normal open WPs when ordering requires (`FR-005A`)
+- [x] T026 Validate dependency graph using existing core validators (missing refs, self-edge, cycles)
+- [x] T027 Implement closed/done WP reference linkage metadata without lane mutation
+- [x] T028 Implement blocker output when pending change stack has no ready WP (`FR-017`)
+- [x] T029 Add unit tests covering valid and invalid dependency configurations
 
 ### Implementation Notes
 - Ensure dependencies are represented consistently in `tasks.md` and WP frontmatter.
