@@ -175,12 +175,12 @@
 **Estimated Prompt Size**: ~390 lines
 
 ### Included Subtasks
-- [ ] T030 Implement `tasks.md` reconciliation to include new change WPs and prompt links
-- [ ] T031 Implement consistency report generation (`updated_tasks_doc`, `broken_links_fixed`, `issues`)
-- [ ] T032 Implement deterministic merge coordination job heuristics for cross-stream risk
-- [ ] T033 Persist merge coordination jobs in planning artifacts for downstream implement/review visibility
-- [ ] T034 Add integration tests for reconciliation outcomes and merge job trigger/no-trigger behavior
-- [ ] T035 Run package-level regression tests for reconciliation logic
+- [x] T030 Implement `tasks.md` reconciliation to include new change WPs and prompt links
+- [x] T031 Implement consistency report generation (`updated_tasks_doc`, `broken_links_fixed`, `issues`)
+- [x] T032 Implement deterministic merge coordination job heuristics for cross-stream risk
+- [x] T033 Persist merge coordination jobs in planning artifacts for downstream implement/review visibility
+- [x] T034 Add integration tests for reconciliation outcomes and merge job trigger/no-trigger behavior
+- [x] T035 Run package-level regression tests for reconciliation logic
 
 ### Implementation Notes
 - Reconciliation should be idempotent when rerun with no new changes.
