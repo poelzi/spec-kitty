@@ -87,11 +87,11 @@
 **Estimated Prompt Size**: ~330 lines
 
 ### Included Subtasks
-- [ ] T013 Create `src/specify_cli/core/change_classifier.py` implementing fixed weighted rubric and threshold mapping
-- [ ] T014 Integrate scoring breakdown into preview response and human-readable warning output
-- [ ] T015 Add explicit continue-or-stop gate in apply flow when classification is `high`
-- [ ] T016 Persist scoring metadata to change request objects for traceability
-- [ ] T017 Add unit tests for threshold boundaries, deterministic tie handling, and warning behavior
+- [x] T013 Create `src/specify_cli/core/change_classifier.py` implementing fixed weighted rubric and threshold mapping
+- [x] T014 Integrate scoring breakdown into preview response and human-readable warning output
+- [x] T015 Add explicit continue-or-stop gate in apply flow when classification is `high`
+- [x] T016 Persist scoring metadata to change request objects for traceability
+- [x] T017 Add unit tests for threshold boundaries, deterministic tie handling, and warning behavior
 
 ### Implementation Notes
 - No probabilistic or model-based scoring paths are allowed.
