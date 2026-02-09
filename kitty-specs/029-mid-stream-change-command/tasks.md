@@ -57,12 +57,12 @@
 **Estimated Prompt Size**: ~420 lines
 
 ### Included Subtasks
-- [ ] T007 Implement stash resolver in `src/specify_cli/core/change_stack.py` for `kitty-specs/change-stack/main/` vs `kitty-specs/<feature>/tasks/`
-- [ ] T008 Extend feature detection/path helpers in `src/specify_cli/core/feature_detection.py` for embedded main stash scenarios
-- [ ] T009 Enforce contributor-access and repository-context validation in command preflight
-- [ ] T010 Implement ambiguity detector and fail-fast error contract before generation (`FR-002A`)
-- [ ] T011 Implement closed/done target detection and link-only enforcement (`FR-016`)
-- [ ] T012 Add unit tests for stash resolution, ambiguity blocking, and closed/done safeguards
+- [x] T007 Implement stash resolver in `src/specify_cli/core/change_stack.py` for `kitty-specs/change-stack/main/` vs `kitty-specs/<feature>/tasks/`
+- [x] T008 Extend feature detection/path helpers in `src/specify_cli/core/feature_detection.py` for embedded main stash scenarios
+- [x] T009 Enforce contributor-access and repository-context validation in command preflight
+- [x] T010 Implement ambiguity detector and fail-fast error contract before generation (`FR-002A`)
+- [x] T011 Implement closed/done target detection and link-only enforcement (`FR-016`)
+- [x] T012 Add unit tests for stash resolution, ambiguity blocking, and closed/done safeguards
 
 ### Implementation Notes
 - Preserve deterministic behavior for all validation outcomes.
