@@ -18,6 +18,7 @@ from specify_cli.core.change_stack import (
     synthesize_change_plan,
     validate_change_request,
     write_change_work_packages,
+    resolve_next_change_wp,
 )
 from specify_cli.core.feature_detection import (
     FeatureDetectionError,
@@ -297,16 +298,22 @@ def next_doable(
     """
     repo_root, feature_slug = _resolve_feature(feature)
 
-    # Stubbed response - actual implementation in WP07
+    # Resolve tasks directory
+    tasks_dir = repo_root / "kitty-specs" / feature_slug / "tasks"
+
+    # Run stack-first selection (FR-017)
+    selection = resolve_next_change_wp(tasks_dir, feature_slug)
+
     result: dict[str, object] = {
         "stashKey": feature_slug,
-        "selectedSource": "normal_backlog",
-        "nextWorkPackageId": None,
-        "normalProgressionBlocked": False,
-        "blockers": [],
-        "status": "stubbed",
-        "message": "Next-doable endpoint registered. Full implementation in WP07.",
+        "selectedSource": selection.selected_source,
+        "nextWorkPackageId": selection.next_wp_id,
+        "normalProgressionBlocked": selection.normal_progression_blocked,
+        "blockers": selection.blockers,
     }
+
+    if selection.pending_change_wps:
+        result["pendingChangeWPs"] = selection.pending_change_wps
 
     _output_result(result, json_output)
 
