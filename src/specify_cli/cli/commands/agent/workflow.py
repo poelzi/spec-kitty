@@ -271,15 +271,15 @@ def _ensure_sparse_checkout(worktree_path: Path) -> bool:
     return True
 
 
-def _find_first_planned_wp(repo_root: Path, feature_slug: str) -> Optional[str]:
-    """Find the first WP file with lane: "planned".
+def _resolve_tasks_dir(repo_root: Path, feature_slug: str) -> Optional[Path]:
+    """Resolve the tasks directory, handling worktree context.
 
     Args:
         repo_root: Repository root path
         feature_slug: Feature slug
 
     Returns:
-        WP ID of first planned task, or None if not found
+        Path to tasks directory, or None if not found
     """
     from specify_cli.core.paths import is_worktree_context
 
@@ -308,7 +308,54 @@ def _find_first_planned_wp(repo_root: Path, feature_slug: str) -> Optional[str]:
     if not tasks_dir.exists():
         return None
 
-    # Find all WP files
+    return tasks_dir
+
+
+def _find_first_planned_wp(repo_root: Path, feature_slug: str) -> Optional[str]:
+    """Find the first WP to implement using stack-first selection (FR-017).
+
+    Selection priority:
+    1. If change-stack WPs exist and one is ready (dependencies satisfied),
+       select it by stack_rank then WP ID.
+    2. If change-stack WPs exist but none are ready, return None with
+       blocker information stored for later output.
+    3. If no change-stack WPs exist, select first planned WP (legacy behavior).
+
+    Args:
+        repo_root: Repository root path
+        feature_slug: Feature slug
+
+    Returns:
+        WP ID of selected task, or None if not found or blocked
+    """
+    tasks_dir = _resolve_tasks_dir(repo_root, feature_slug)
+    if tasks_dir is None:
+        return None
+
+    # Try stack-first selection via resolve_next_change_wp
+    try:
+        from specify_cli.core.change_stack import resolve_next_change_wp
+        selection = resolve_next_change_wp(tasks_dir, feature_slug)
+
+        if selection.selected_source == "change_stack" and selection.next_wp_id:
+            # Ready change-stack WP found - use it
+            return selection.next_wp_id
+
+        if selection.selected_source == "blocked":
+            # Change-stack has pending items but none are ready
+            # Store blocker info for output (accessed via _last_stack_selection)
+            _store_stack_selection(selection)
+            return None
+
+        # selected_source == "normal_backlog" - fall through to legacy selection
+        # If resolve_next_change_wp already picked a normal WP, use it
+        if selection.next_wp_id:
+            return selection.next_wp_id
+    except ImportError:
+        # change_stack module not available - fall through to legacy
+        pass
+
+    # Legacy fallback: find first planned WP by file order
     wp_files = sorted(tasks_dir.glob("WP*.md"))
 
     for wp_file in wp_files:
@@ -322,6 +369,27 @@ def _find_first_planned_wp(repo_root: Path, feature_slug: str) -> Optional[str]:
                 return wp_id
 
     return None
+
+
+# Module-level storage for stack selection result (for output guidance)
+_last_stack_selection_result: Optional[object] = None
+
+
+def _store_stack_selection(selection: object) -> None:
+    """Store the last stack selection result for output guidance."""
+    global _last_stack_selection_result
+    _last_stack_selection_result = selection
+
+
+def _get_last_stack_selection() -> Optional[object]:
+    """Get the last stack selection result."""
+    return _last_stack_selection_result
+
+
+def _clear_stack_selection() -> None:
+    """Clear the stored stack selection result."""
+    global _last_stack_selection_result
+    _last_stack_selection_result = None
 
 
 @app.command(name="implement")
@@ -359,12 +427,41 @@ def implement(
         # Determine which WP to implement
         if wp_id:
             normalized_wp_id = _normalize_wp_id(wp_id)
+            _clear_stack_selection()
         else:
-            # Auto-detect first planned WP
+            # Auto-detect using stack-first selection (FR-017)
+            _clear_stack_selection()
             normalized_wp_id = _find_first_planned_wp(repo_root, feature_slug)
             if not normalized_wp_id:
+                # Check if blocked by change stack
+                last_selection = _get_last_stack_selection()
+                if last_selection is not None:
+                    from specify_cli.core.change_stack import StackSelectionResult
+                    if isinstance(last_selection, StackSelectionResult) and last_selection.selected_source == "blocked":
+                        print("Error: Change stack has pending work packages but none are ready.")
+                        print("Normal backlog progression is blocked until change stack items are resolved.")
+                        print("")
+                        if last_selection.blockers:
+                            print("Blockers:")
+                            for blocker in last_selection.blockers:
+                                print(f"  - {blocker}")
+                        if last_selection.pending_change_wps:
+                            print(f"\nPending change WPs: {', '.join(last_selection.pending_change_wps)}")
+                        print("\nResolve blocking dependencies or specify a WP ID explicitly.")
+                        raise typer.Exit(1)
                 print("Error: No planned work packages found. Specify a WP ID explicitly.")
                 raise typer.Exit(1)
+
+        # T039: Print selection source for transparency
+        last_selection = _get_last_stack_selection()
+        if last_selection is not None:
+            from specify_cli.core.change_stack import StackSelectionResult
+            if isinstance(last_selection, StackSelectionResult):
+                if last_selection.selected_source == "change_stack":
+                    print(f"ℹ️  Selected from change stack (stack-first priority)")
+                elif last_selection.selected_source == "normal_backlog":
+                    print(f"ℹ️  Selected from normal backlog (no change stack items)")
+        _clear_stack_selection()
 
         # ALWAYS validate dependencies before creating workspace or displaying prompts
         # This prevents creating workspaces with wrong base branches
