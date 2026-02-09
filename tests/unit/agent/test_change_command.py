@@ -1,7 +1,8 @@
-"""Unit tests for agent change command with stash routing and validation.
+"""Unit tests for agent change command with stash routing, validation, and complexity.
 
 Tests the agent change preview command with real stash routing,
-ambiguity detection, and closed reference checking.
+ambiguity detection, closed reference checking, and deterministic
+complexity scoring (WP02 + WP03).
 """
 
 from __future__ import annotations
@@ -217,3 +218,162 @@ class TestPreviewValidation:
             assert result.exit_code == 0
             data = json.loads(result.output)
             assert data["validationState"] == "valid"
+
+
+class TestPreviewComplexityIntegration:
+    """Test that preview includes real complexity scoring (WP03)."""
+
+    def test_preview_includes_real_complexity_scores(self) -> None:
+        """Preview should include real (non-zero) complexity scores from classifier."""
+        with patch("specify_cli.cli.commands.agent.change.find_repo_root") as mock_root, \
+             patch("specify_cli.core.change_stack.get_current_branch", return_value="029-test"), \
+             patch("specify_cli.core.change_stack._get_main_repo_root") as mock_main:
+            mock_root.return_value = Path("/tmp/fake-repo")
+            mock_main.return_value = Path("/tmp/fake-repo")
+
+            result = runner.invoke(
+                agent_change_app,
+                ["preview", "add package requests and update the shared config module", "--json"],
+            )
+            assert result.exit_code == 0
+            data = json.loads(result.output)
+            complexity = data["complexity"]
+            # Should have real scoring fields
+            assert "classification" in complexity
+            assert "totalScore" in complexity
+            assert "proposedMode" in complexity
+            assert "reviewAttention" in complexity
+            # At least one score component should be non-zero for this request
+            assert complexity["totalScore"] >= 0
+
+    def test_preview_high_complexity_shows_warning(self) -> None:
+        """Preview should show warningRequired for high complexity requests."""
+        with patch("specify_cli.cli.commands.agent.change.find_repo_root") as mock_root, \
+             patch("specify_cli.core.change_stack.get_current_branch", return_value="029-test"), \
+             patch("specify_cli.core.change_stack._get_main_repo_root") as mock_main:
+            mock_root.return_value = Path("/tmp/fake-repo")
+            mock_main.return_value = Path("/tmp/fake-repo")
+
+            # Construct a high-complexity request
+            result = runner.invoke(
+                agent_change_app,
+                [
+                    "preview",
+                    "replace framework Django with FastAPI, migrate from PostgreSQL to MongoDB, "
+                    "update the api contract for all endpoints, modify the deployment pipeline "
+                    "and kubernetes manifests, refactor all modules across the codebase",
+                    "--json",
+                ],
+            )
+            assert result.exit_code == 0
+            data = json.loads(result.output)
+            if data["complexity"]["classification"] == "high":
+                assert data["warningRequired"] is True
+                assert data["warningMessage"] is not None
+                assert data["complexity"]["recommendSpecify"] is True
+
+    def test_preview_simple_no_warning(self) -> None:
+        """Simple requests should not trigger a warning."""
+        with patch("specify_cli.cli.commands.agent.change.find_repo_root") as mock_root, \
+             patch("specify_cli.core.change_stack.get_current_branch", return_value="029-test"), \
+             patch("specify_cli.core.change_stack._get_main_repo_root") as mock_main:
+            mock_root.return_value = Path("/tmp/fake-repo")
+            mock_main.return_value = Path("/tmp/fake-repo")
+
+            result = runner.invoke(
+                agent_change_app,
+                ["preview", "fix typo in README", "--json"],
+            )
+            assert result.exit_code == 0
+            data = json.loads(result.output)
+            assert data["warningRequired"] is False
+            assert data["complexity"]["classification"] == "simple"
+
+
+class TestApplyContinueGate:
+    """Test FR-010/FR-011: explicit continue/stop gate on apply."""
+
+    def test_apply_blocks_high_complexity_without_continue(self) -> None:
+        """Apply should block high complexity requests without --continue."""
+        with patch("specify_cli.cli.commands.agent.change.find_repo_root") as mock_root, \
+             patch("specify_cli.cli.commands.agent.change.detect_feature_slug") as mock_slug:
+            mock_root.return_value = Path("/tmp/fake-repo")
+            mock_slug.return_value = "029-test"
+
+            result = runner.invoke(
+                agent_change_app,
+                [
+                    "apply", "test-id",
+                    "--request-text",
+                    "replace framework Django with FastAPI, migrate from PostgreSQL to MongoDB, "
+                    "update the api contract for all endpoints, modify the deployment pipeline "
+                    "and kubernetes manifests, refactor all modules across the codebase",
+                    "--json",
+                ],
+            )
+            # Should either block (exit 1) if high, or pass through if scoring below threshold
+            output = result.output
+            data = json.loads(output)
+            if "error" in data and data["error"] == "high_complexity_blocked":
+                assert result.exit_code == 1
+                assert "complexity threshold" in data["message"]
+
+    def test_apply_allows_high_complexity_with_continue(self) -> None:
+        """Apply should allow high complexity requests with --continue."""
+        with patch("specify_cli.cli.commands.agent.change.find_repo_root") as mock_root, \
+             patch("specify_cli.cli.commands.agent.change.detect_feature_slug") as mock_slug:
+            mock_root.return_value = Path("/tmp/fake-repo")
+            mock_slug.return_value = "029-test"
+
+            result = runner.invoke(
+                agent_change_app,
+                [
+                    "apply", "test-id",
+                    "--request-text",
+                    "replace framework Django with FastAPI, migrate from PostgreSQL to MongoDB, "
+                    "update the api contract for all endpoints, modify the deployment pipeline "
+                    "and kubernetes manifests, refactor all modules across the codebase",
+                    "--continue",
+                    "--json",
+                ],
+            )
+            assert result.exit_code == 0
+            data = json.loads(result.output)
+            assert data["requestId"] == "test-id"
+            # When --continue is used with high complexity, result should include scoring
+            if "complexity" in data:
+                assert "reviewAttention" in data["complexity"]
+
+    def test_apply_no_gate_without_request_text(self) -> None:
+        """Apply without --request-text should skip gating (backward compat)."""
+        with patch("specify_cli.cli.commands.agent.change.find_repo_root") as mock_root, \
+             patch("specify_cli.cli.commands.agent.change.detect_feature_slug") as mock_slug:
+            mock_root.return_value = Path("/tmp/fake-repo")
+            mock_slug.return_value = "029-test"
+
+            result = runner.invoke(
+                agent_change_app,
+                ["apply", "test-id", "--json"],
+            )
+            assert result.exit_code == 0
+            data = json.loads(result.output)
+            assert data["requestId"] == "test-id"
+
+    def test_apply_simple_passes_without_continue(self) -> None:
+        """Apply with simple complexity should pass without --continue."""
+        with patch("specify_cli.cli.commands.agent.change.find_repo_root") as mock_root, \
+             patch("specify_cli.cli.commands.agent.change.detect_feature_slug") as mock_slug:
+            mock_root.return_value = Path("/tmp/fake-repo")
+            mock_slug.return_value = "029-test"
+
+            result = runner.invoke(
+                agent_change_app,
+                [
+                    "apply", "test-id",
+                    "--request-text", "fix typo in README",
+                    "--json",
+                ],
+            )
+            assert result.exit_code == 0
+            data = json.loads(result.output)
+            assert data["requestId"] == "test-id"

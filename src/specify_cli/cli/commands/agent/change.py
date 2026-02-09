@@ -9,6 +9,7 @@ from typing import Optional
 import typer
 from typing_extensions import Annotated
 
+from specify_cli.core.change_classifier import ComplexityClassification
 from specify_cli.core.change_stack import (
     ChangeStackError,
     ValidationState,
@@ -123,6 +124,17 @@ def preview(
 
     # Build preview response
     requires_clarification = change_req.validation_state == ValidationState.AMBIGUOUS
+    score = change_req.complexity_score
+
+    # Determine warning state (FR-010)
+    warning_required = score is not None and score.recommend_specify
+    warning_message: str | None = None
+    if warning_required:
+        warning_message = (
+            "This change request exceeds the complexity threshold. "
+            "Consider using /spec-kitty.specify for full planning. "
+            "Use --continue flag on apply to proceed anyway."
+        )
 
     result: dict[str, object] = {
         "requestId": change_req.request_id,
@@ -130,19 +142,10 @@ def preview(
         "stashScope": change_req.stash.scope.value,
         "stashPath": str(change_req.stash.stash_path),
         "validationState": change_req.validation_state.value,
-        "complexity": {
-            "scopeBreadthScore": 0,
-            "couplingScore": 0,
-            "dependencyChurnScore": 0,
-            "ambiguityScore": 0,
-            "integrationRiskScore": 0,
-            "totalScore": 0,
-            "classification": "simple",
-            "recommendSpecify": False,
-        },
-        "proposedMode": "single_wp",
-        "warningRequired": False,
-        "warningMessage": None,
+        "complexity": score.to_dict() if score is not None else {},
+        "proposedMode": score.proposed_mode.value if score is not None else "single_wp",
+        "warningRequired": warning_required,
+        "warningMessage": warning_message,
         "requiresClarification": requires_clarification,
         "clarificationPrompt": change_req.ambiguity.clarification_prompt,
     }
@@ -160,6 +163,10 @@ def preview(
 @app.command(name="apply")
 def apply(
     request_id: Annotated[str, typer.Argument(help="Request ID from preview step")],
+    request_text: Annotated[
+        Optional[str],
+        typer.Option("--request-text", help="Original request text (for re-scoring)"),
+    ] = None,
     feature: Annotated[
         Optional[str], typer.Option("--feature", help="Feature slug (auto-detected)")
     ] = None,
@@ -177,13 +184,34 @@ def apply(
     package files with dependencies, documentation links, and merge
     coordination jobs.
 
+    When the request exceeds the complexity threshold, the --continue flag
+    is required (FR-010, SC-003). Without it, apply is blocked.
+
     Examples:
         spec-kitty agent change apply "preview-id-123"
         spec-kitty agent change apply "preview-id-123" --continue --json
+        spec-kitty agent change apply "id" --request-text "replace ORM" --continue
     """
     repo_root, feature_slug = _resolve_feature(feature)
 
-    # Stubbed response - actual implementation in WP04-WP06
+    # FR-010/FR-011: Re-score if request text provided, enforce continue gate
+    from specify_cli.core.change_classifier import classify_change_request as _classify
+
+    score = None
+    if request_text:
+        score = _classify(request_text, continued_after_warning=continue_after_warning)
+        if score.recommend_specify and not continue_after_warning:
+            _output_error(
+                "high_complexity_blocked",
+                "Request exceeds complexity threshold (score {}/10, classification: {}). "
+                "Use --continue to proceed or use /spec-kitty.specify for full planning.".format(
+                    score.total_score, score.classification.value
+                ),
+                json_output,
+            )
+            raise typer.Exit(1)
+
+    # Stubbed response - actual WP synthesis in WP04-WP06
     result: dict[str, object] = {
         "requestId": request_id,
         "createdWorkPackages": [],
@@ -198,6 +226,10 @@ def apply(
         "status": "stubbed",
         "message": "Apply endpoint registered. Full implementation in WP04-WP06.",
     }
+
+    # Include scoring metadata if available
+    if score is not None:
+        result["complexity"] = score.to_dict()
 
     _output_result(result, json_output)
 
