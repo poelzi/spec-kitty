@@ -1,8 +1,9 @@
 """Change stack management - stash routing, request validation, and policy enforcement.
 
 Implements branch-aware stash routing (FR-003), ambiguity fail-fast validation
-(FR-002A), and closed/done link-only policy (FR-016) for the /spec-kitty.change
-command.
+(FR-002A), closed/done link-only policy (FR-016), dependency policy enforcement
+(FR-005, FR-005A, FR-006), and stack-first selection with blocker output (FR-017)
+for the /spec-kitty.change command.
 """
 
 from __future__ import annotations
@@ -22,6 +23,11 @@ from specify_cli.core.change_classifier import (
     PackagingMode,
     ReviewAttention,
     classify_change_request,
+)
+from specify_cli.core.dependency_graph import (
+    build_dependency_graph,
+    detect_cycles,
+    validate_dependencies,
 )
 from specify_cli.core.git_ops import get_current_branch
 from specify_cli.core.feature_detection import _get_main_repo_root
@@ -155,6 +161,56 @@ class ChangeRequest:
     ambiguity: AmbiguityResult
     closed_references: ClosedReferenceCheck
     complexity_score: Optional[ComplexityScore] = None
+
+
+@dataclass(frozen=True)
+class DependencyEdge:
+    """A candidate dependency edge between work packages.
+
+    Attributes:
+        source: The WP that has the dependency (e.g., a change WP)
+        target: The WP being depended on
+        edge_type: Description of edge kind ('change_to_normal', 'change_to_change')
+    """
+    source: str
+    target: str
+    edge_type: str
+
+
+@dataclass
+class DependencyPolicyResult:
+    """Result of dependency policy validation.
+
+    Attributes:
+        valid_edges: Edges that passed policy checks
+        rejected_edges: Edges rejected with reasons
+        errors: Critical errors that block the operation
+    """
+    valid_edges: list[DependencyEdge] = field(default_factory=list)
+    rejected_edges: list[tuple[DependencyEdge, str]] = field(default_factory=list)
+    errors: list[str] = field(default_factory=list)
+
+    @property
+    def is_valid(self) -> bool:
+        return len(self.errors) == 0
+
+
+@dataclass
+class StackSelectionResult:
+    """Result of stack-first WP selection (FR-017).
+
+    Attributes:
+        selected_source: 'change_stack', 'normal_backlog', or 'blocked'
+        next_wp_id: The WP ID to implement next, or None if blocked
+        normal_progression_blocked: True if change stack blocks normal WPs
+        blockers: List of blocking dependency descriptions
+        pending_change_wps: Change WPs that exist but aren't ready
+    """
+    selected_source: str
+    next_wp_id: Optional[str] = None
+    normal_progression_blocked: bool = False
+    blockers: list[str] = field(default_factory=list)
+    pending_change_wps: list[str] = field(default_factory=list)
 
 
 # ============================================================================
@@ -410,6 +466,323 @@ def validate_no_closed_mutation(
         if lane in CLOSED_LANES:
             blocked.append(wp_id)
     return blocked
+
+
+# ============================================================================
+# Dependency Policy Enforcement (T024, T025, T026, T027, T028)
+# ============================================================================
+
+
+def extract_dependency_candidates(
+    affected_wp_ids: list[str],
+    change_wp_id: str,
+    tasks_dir: Path,
+) -> list[DependencyEdge]:
+    """Build candidate dependency edges from change request impact and open WPs (T024).
+
+    Parses affected open WPs and builds a deterministic candidate edge list
+    for the generated change WP. Edges point from the change WP to affected
+    open WPs that impose ordering constraints.
+
+    Args:
+        affected_wp_ids: WP IDs identified as impacted by the change request
+        change_wp_id: The new change WP being created
+        tasks_dir: Path to the tasks directory for lane lookups
+
+    Returns:
+        List of candidate DependencyEdge objects in deterministic order
+    """
+    candidates: list[DependencyEdge] = []
+
+    for wp_id in sorted(affected_wp_ids):
+        if wp_id == change_wp_id:
+            continue
+
+        lane = _get_wp_lane(tasks_dir, wp_id)
+        if lane is None:
+            continue
+
+        if lane in CLOSED_LANES:
+            # Closed WPs become closed_reference_links, not dependencies
+            continue
+
+        # Determine if target is a change WP
+        is_change_wp = _is_change_wp(tasks_dir, wp_id)
+        edge_type = "change_to_change" if is_change_wp else "change_to_normal"
+
+        candidates.append(DependencyEdge(
+            source=change_wp_id,
+            target=wp_id,
+            edge_type=edge_type,
+        ))
+
+    return candidates
+
+
+def _is_change_wp(tasks_dir: Path, wp_id: str) -> bool:
+    """Check if a WP is a change-stack WP by reading its frontmatter."""
+    if not tasks_dir.exists():
+        return False
+
+    wp_files = list(tasks_dir.glob(f"{wp_id}-*.md"))
+    if not wp_files:
+        return False
+
+    content = wp_files[0].read_text(encoding="utf-8")
+    match = re.search(r'^change_stack:\s*(true|True)\s*$', content, re.MULTILINE)
+    return match is not None
+
+
+def validate_dependency_policy(
+    candidates: list[DependencyEdge],
+    tasks_dir: Path,
+) -> DependencyPolicyResult:
+    """Enforce dependency policy rules on candidate edges (T025).
+
+    Policy rules (FR-005, FR-005A):
+    - ALLOW: change WP -> normal open WP (ordering constraint)
+    - ALLOW: change WP -> change WP (change-to-change ordering)
+    - REJECT: any edge targeting a closed/done WP as a dependency
+
+    Args:
+        candidates: Candidate dependency edges to validate
+        tasks_dir: Path to tasks directory for lane lookups
+
+    Returns:
+        DependencyPolicyResult with valid/rejected edges and diagnostics
+    """
+    result = DependencyPolicyResult()
+
+    for edge in candidates:
+        target_lane = _get_wp_lane(tasks_dir, edge.target)
+
+        if target_lane is None:
+            result.rejected_edges.append(
+                (edge, f"Target {edge.target} not found in tasks directory")
+            )
+            continue
+
+        if target_lane in CLOSED_LANES:
+            result.rejected_edges.append(
+                (edge, f"Target {edge.target} is closed/done (lane: {target_lane}). "
+                 f"Use closed_reference_links instead of dependencies.")
+            )
+            continue
+
+        # Edge targets an open WP - allowed by policy
+        result.valid_edges.append(edge)
+
+    return result
+
+
+def validate_dependency_graph_integrity(
+    change_wp_id: str,
+    dependency_ids: list[str],
+    tasks_dir: Path,
+) -> tuple[bool, list[str]]:
+    """Validate full graph integrity after adding change WP dependencies (T026).
+
+    Runs existing validators for missing refs, self-edges, and cycles.
+    Aborts atomically on any validation failure.
+
+    Args:
+        change_wp_id: The new change WP ID
+        dependency_ids: Proposed dependency WP IDs for the change WP
+        tasks_dir: Path to tasks directory
+
+    Returns:
+        Tuple of (is_valid, error_messages). Empty errors means valid.
+    """
+    # Build the current graph from existing WPs
+    graph = build_dependency_graph(tasks_dir)
+
+    # Add the proposed change WP with its dependencies
+    graph[change_wp_id] = dependency_ids
+
+    # Validate the proposed dependencies using existing validators
+    is_valid, errors = validate_dependencies(change_wp_id, dependency_ids, graph)
+
+    # Also run full cycle detection on the complete graph
+    cycles = detect_cycles(graph)
+    if cycles:
+        for cycle in cycles:
+            cycle_str = " → ".join(cycle)
+            error = f"Circular dependency detected: {cycle_str}"
+            if error not in errors:
+                errors.append(error)
+        is_valid = False
+
+    return is_valid, errors
+
+
+def build_closed_reference_links(
+    request_text: str,
+    tasks_dir: Path,
+    feature_slug: str,
+    repo_root: Path,
+) -> list[str]:
+    """Build closed_reference_links metadata for a change WP (T027).
+
+    Identifies closed/done WPs referenced in the request text and returns
+    them as link-only references. These are stored in the change WP's
+    frontmatter as historical context without reopening the closed WPs.
+
+    Per FR-016: No lane transition is attempted on closed/done targets.
+
+    Args:
+        request_text: The change request text
+        tasks_dir: Path to tasks directory
+        feature_slug: Feature slug for context
+        repo_root: Repository root path
+
+    Returns:
+        List of closed WP IDs to include in closed_reference_links metadata
+    """
+    closed_check = check_closed_references(request_text, repo_root, feature_slug)
+
+    if not closed_check.has_closed_references:
+        return []
+
+    # Validate that no mutation would occur on these WPs
+    blocked = validate_no_closed_mutation(closed_check.closed_wp_ids, tasks_dir)
+    if blocked:
+        # These are expected to be closed - they become link-only references
+        # No lane transition, no reopening, just historical context
+        pass
+
+    return sorted(closed_check.closed_wp_ids)
+
+
+def resolve_next_change_wp(
+    tasks_dir: Path,
+    feature_slug: str,
+) -> StackSelectionResult:
+    """Resolve next doable WP with change-stack priority (T028, FR-017).
+
+    Implements stack-first selection:
+    1. If ready change-stack WPs exist, select the highest-priority one
+    2. If change-stack WPs exist but none are ready, block normal progression
+       and report blocking dependencies
+    3. If no change-stack WPs exist, allow normal backlog selection
+
+    Args:
+        tasks_dir: Path to tasks directory
+        feature_slug: Feature slug for context
+
+    Returns:
+        StackSelectionResult with selection decision and blocker details
+    """
+    if not tasks_dir.exists():
+        return StackSelectionResult(
+            selected_source="normal_backlog",
+        )
+
+    # Collect all change-stack WPs and their states
+    change_wps: list[tuple[str, str, int]] = []  # (wp_id, lane, stack_rank)
+    normal_planned: list[str] = []  # Normal WPs in planned lane
+
+    graph = build_dependency_graph(tasks_dir)
+
+    for wp_file in sorted(tasks_dir.glob("WP*.md")):
+        content = wp_file.read_text(encoding="utf-8")
+
+        # Extract WP ID
+        wp_id_match = re.search(r'^work_package_id:\s*["\']?(WP\d{2})["\']?\s*$', content, re.MULTILINE)
+        if not wp_id_match:
+            continue
+        wp_id = wp_id_match.group(1)
+
+        # Check if it's a change-stack WP
+        is_change = re.search(r'^change_stack:\s*(true|True)\s*$', content, re.MULTILINE)
+
+        # Get lane
+        lane_match = re.search(r'^lane:\s*["\']?(\w+)["\']?\s*$', content, re.MULTILINE)
+        lane = lane_match.group(1) if lane_match else "planned"
+
+        if is_change:
+            # Get stack_rank (default 0)
+            rank_match = re.search(r'^stack_rank:\s*(\d+)\s*$', content, re.MULTILINE)
+            rank = int(rank_match.group(1)) if rank_match else 0
+            change_wps.append((wp_id, lane, rank))
+        elif lane == "planned":
+            normal_planned.append(wp_id)
+
+    # No change-stack WPs at all -> normal backlog selection
+    if not change_wps:
+        return StackSelectionResult(
+            selected_source="normal_backlog",
+            next_wp_id=normal_planned[0] if normal_planned else None,
+        )
+
+    # Find change WPs in "planned" lane (candidates for doing)
+    planned_change_wps = [
+        (wp_id, rank) for wp_id, lane, rank in change_wps
+        if lane == "planned"
+    ]
+
+    # Check which planned change WPs have all dependencies satisfied
+    ready_change_wps: list[tuple[str, int]] = []
+    blocked_change_wps: list[tuple[str, list[str]]] = []
+
+    for wp_id, rank in planned_change_wps:
+        deps = graph.get(wp_id, [])
+        unsatisfied: list[str] = []
+
+        for dep in deps:
+            dep_lane = _get_wp_lane(tasks_dir, dep)
+            if dep_lane != "done":
+                unsatisfied.append(dep)
+
+        if unsatisfied:
+            blocked_change_wps.append((wp_id, unsatisfied))
+        else:
+            ready_change_wps.append((wp_id, rank))
+
+    # If any change WPs are still in progress (doing/for_review), report that
+    active_change_wps = [
+        wp_id for wp_id, lane, _ in change_wps
+        if lane in ("doing", "for_review")
+    ]
+
+    # Ready change WPs available -> select highest priority (lowest rank)
+    if ready_change_wps:
+        ready_change_wps.sort(key=lambda x: x[1])
+        selected_wp_id = ready_change_wps[0][0]
+        return StackSelectionResult(
+            selected_source="change_stack",
+            next_wp_id=selected_wp_id,
+        )
+
+    # Pending change WPs exist but none ready -> block normal progression
+    pending_ids = (
+        [wp_id for wp_id, _ in planned_change_wps]
+        + active_change_wps
+    )
+
+    if pending_ids:
+        blockers: list[str] = []
+        for wp_id, unsatisfied in blocked_change_wps:
+            blockers.append(
+                f"{wp_id} blocked by: {', '.join(sorted(unsatisfied))}"
+            )
+        for wp_id in active_change_wps:
+            active_lane = next(
+                (lane for wid, lane, _ in change_wps if wid == wp_id), "doing"
+            )
+            blockers.append(f"{wp_id} is in {active_lane} lane")
+
+        return StackSelectionResult(
+            selected_source="blocked",
+            normal_progression_blocked=True,
+            blockers=blockers,
+            pending_change_wps=sorted(pending_ids),
+        )
+
+    # All change WPs are done -> allow normal backlog
+    return StackSelectionResult(
+        selected_source="normal_backlog",
+        next_wp_id=normal_planned[0] if normal_planned else None,
+    )
 
 
 # ============================================================================
