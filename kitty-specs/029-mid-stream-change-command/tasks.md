@@ -232,7 +232,7 @@
 **Estimated Prompt Size**: ~300 lines
 
 ### Included Subtasks
-- [ ] T041 Add end-to-end integration scenarios covering main stash routing, feature stash routing, high complexity continue/stop, and ambiguity fail-fast
+- [x] T041 Add end-to-end integration scenarios covering main stash routing, feature stash routing, high complexity continue/stop, and ambiguity fail-fast
 - [ ] T042 Run and stabilize targeted test matrix plus mypy strict checks for touched modules
 - [ ] T043 Update user and contributor docs for `/spec-kitty.change` behavior, dependency policy, and stack-first semantics
 - [ ] T044 Validate success criteria mapping (`SC-001` to `SC-005`) and run final encoding/consistency checks
