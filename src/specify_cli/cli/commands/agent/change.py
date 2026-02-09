@@ -17,8 +17,11 @@ from specify_cli.core.change_stack import (
     _next_wp_id,
     _render_wp_body,
     build_closed_reference_links,
+    compute_merge_coordination_jobs,
     extract_dependency_candidates,
     generate_change_work_packages,
+    persist_merge_coordination_jobs,
+    reconcile_change_stack,
     resolve_next_change_wp,
     resolve_stash,
     synthesize_change_plan,
@@ -319,18 +322,30 @@ def apply(
             for e, reason in policy_result.rejected_edges
         ]
 
+        # Reconcile tasks.md and validate dependencies (WP06)
+        feature_dir = change_req.stash.stash_path.parent
+        consistency = reconcile_change_stack(
+            change_req.stash.stash_path,
+            feature_dir,
+            wps,
+        )
+
+        # Compute merge coordination jobs (WP06)
+        merge_jobs = compute_merge_coordination_jobs(
+            wps,
+            change_req.stash.stash_path,
+            plan,
+        )
+        if merge_jobs:
+            persist_merge_coordination_jobs(merge_jobs, feature_dir)
+
         result: dict[str, object] = {
             "requestId": request_id,
             "createdWorkPackages": [wp.to_dict() for wp in wps],
             "writtenFiles": [str(p) for p in written_paths],
             "closedReferenceLinks": plan.closed_reference_wp_ids,
-            "mergeCoordinationJobs": [],  # Full implementation in WP06
-            "consistency": {
-                "updatedTasksDoc": False,
-                "dependencyValidationPassed": len(dep_issues) == 0,
-                "brokenLinksFixed": 0,
-                "issues": dep_issues,
-            },
+            "mergeCoordinationJobs": [j.to_dict() for j in merge_jobs],
+            "consistency": consistency.to_dict(),
             "mode": plan.mode.value,
         }
         if rejected_diagnostics:
@@ -420,18 +435,32 @@ def reconcile(
     """
     repo_root, feature_slug = _resolve_feature(feature)
 
-    # Stubbed response - actual implementation in WP06
+    # Resolve paths
+    feature_dir = repo_root / "kitty-specs" / feature_slug
+    tasks_dir = feature_dir / "tasks"
+
+    # Run reconciliation (no new WPs - reconcile existing state)
+    from specify_cli.core.change_stack import validate_all_dependencies
+
+    consistency = reconcile_change_stack(tasks_dir, feature_dir, [])
+
+    # Recompute merge jobs if requested
+    merge_jobs_data: list[dict[str, object]] = []
+    if recompute_merge_jobs:
+        import json as _json
+
+        jobs_path = feature_dir / "change-merge-jobs.json"
+        if jobs_path.exists():
+            try:
+                jobs_data = _json.loads(jobs_path.read_text(encoding="utf-8"))
+                merge_jobs_data = jobs_data.get("jobs", [])
+            except (ValueError, KeyError):
+                consistency.issues.append("Failed to parse change-merge-jobs.json")
+
     result: dict[str, object] = {
         "stashKey": feature_slug,
-        "consistency": {
-            "updatedTasksDoc": False,
-            "dependencyValidationPassed": True,
-            "brokenLinksFixed": 0,
-            "issues": [],
-        },
-        "mergeCoordinationJobs": [],
-        "status": "stubbed",
-        "message": "Reconcile endpoint registered. Full implementation in WP06.",
+        "consistency": consistency.to_dict(),
+        "mergeCoordinationJobs": merge_jobs_data,
     }
 
     _output_result(result, json_output)

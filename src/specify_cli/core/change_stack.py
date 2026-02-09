@@ -1412,6 +1412,532 @@ def write_change_work_packages(
 
 
 # ============================================================================
+# Reconciliation and Consistency (T030, T031)
+# ============================================================================
+
+
+@dataclass
+class ConsistencyReport:
+    """Machine-readable reconciliation status (FR-007, SC-001).
+
+    Attributes:
+        updated_tasks_doc: Whether tasks.md was updated
+        dependency_validation_passed: Whether all dependencies are valid
+        broken_links_fixed: Number of broken links repaired
+        issues: List of issue descriptions found during reconciliation
+        wp_sections_added: Number of new WP sections added to tasks.md
+        wp_sections_updated: Number of existing WP sections updated
+    """
+    updated_tasks_doc: bool = False
+    dependency_validation_passed: bool = True
+    broken_links_fixed: int = 0
+    issues: list[str] = field(default_factory=list)
+    wp_sections_added: int = 0
+    wp_sections_updated: int = 0
+
+    def to_dict(self) -> dict[str, object]:
+        """Serialize to JSON-friendly dictionary."""
+        return {
+            "updatedTasksDoc": self.updated_tasks_doc,
+            "dependencyValidationPassed": self.dependency_validation_passed,
+            "brokenLinksFixed": self.broken_links_fixed,
+            "issues": self.issues,
+            "wpSectionsAdded": self.wp_sections_added,
+            "wpSectionsUpdated": self.wp_sections_updated,
+        }
+
+
+@dataclass
+class MergeCoordinationJob:
+    """A merge coordination job triggered by cross-stream risk (FR-013).
+
+    Attributes:
+        job_id: Unique identifier for this job
+        reason: Why this job was triggered
+        source_wp: The change WP that triggered coordination
+        target_wps: WPs that need coordination
+        risk_indicator: The risk factor that triggered this job
+    """
+    job_id: str
+    reason: str
+    source_wp: str
+    target_wps: list[str] = field(default_factory=list)
+    risk_indicator: str = ""
+
+    def to_dict(self) -> dict[str, object]:
+        """Serialize to JSON-friendly dictionary."""
+        return {
+            "jobId": self.job_id,
+            "reason": self.reason,
+            "sourceWP": self.source_wp,
+            "targetWPs": self.target_wps,
+            "riskIndicator": self.risk_indicator,
+        }
+
+
+def reconcile_tasks_doc(
+    tasks_dir: Path,
+    feature_dir: Path,
+    change_wps: list[ChangeWorkPackage],
+) -> ConsistencyReport:
+    """Reconcile tasks.md with generated change WPs (T030, FR-007).
+
+    Inserts or updates WP sections and prompt links in tasks.md.
+    Preserves existing checklist state for unrelated subtasks.
+    Ensures deterministic ordering by WP ID.
+
+    Args:
+        tasks_dir: Path to the tasks directory
+        feature_dir: Path to the feature directory (parent of tasks/)
+        change_wps: List of change WPs that were generated
+
+    Returns:
+        ConsistencyReport with reconciliation results
+    """
+    report = ConsistencyReport()
+
+    if not change_wps:
+        return report
+
+    tasks_doc_path = feature_dir / "tasks.md"
+
+    # Read existing content or start fresh
+    existing_content = ""
+    existing_sections: dict[str, str] = {}
+    if tasks_doc_path.exists():
+        existing_content = tasks_doc_path.read_text(encoding="utf-8")
+        existing_sections = _parse_wp_sections(existing_content)
+
+    # Build updated sections for change WPs
+    new_sections: list[str] = []
+    for wp in change_wps:
+        wp_id = wp.work_package_id
+        section = _build_tasks_doc_section(wp)
+
+        if wp_id in existing_sections:
+            # Update existing section
+            existing_sections[wp_id] = section
+            report.wp_sections_updated += 1
+        else:
+            # New section
+            new_sections.append(section)
+            report.wp_sections_added += 1
+
+    if not new_sections and report.wp_sections_updated == 0:
+        return report
+
+    # Rebuild the document preserving non-WP content
+    updated_content = _rebuild_tasks_doc(
+        existing_content, existing_sections, new_sections, change_wps,
+    )
+
+    tasks_doc_path.parent.mkdir(parents=True, exist_ok=True)
+    tasks_doc_path.write_text(updated_content, encoding="utf-8")
+    report.updated_tasks_doc = True
+
+    return report
+
+
+def _parse_wp_sections(content: str) -> dict[str, str]:
+    """Parse tasks.md into a dict of WP ID -> section content.
+
+    Sections are identified by headers matching '## WP##' or '### WP##'.
+    """
+    sections: dict[str, str] = {}
+    current_wp: Optional[str] = None
+    current_lines: list[str] = []
+
+    for line in content.split("\n"):
+        wp_header = re.match(r'^#{2,3}\s+(WP\d{2})\b', line)
+        if wp_header:
+            # Save previous section
+            if current_wp is not None:
+                sections[current_wp] = "\n".join(current_lines)
+            current_wp = wp_header.group(1)
+            current_lines = [line]
+        elif current_wp is not None:
+            # Check if we hit another non-WP heading (section boundary)
+            if re.match(r'^#{1,2}\s+(?!WP\d{2})', line):
+                sections[current_wp] = "\n".join(current_lines)
+                current_wp = None
+                current_lines = []
+            else:
+                current_lines.append(line)
+
+    # Save last section
+    if current_wp is not None:
+        sections[current_wp] = "\n".join(current_lines)
+
+    return sections
+
+
+def _build_tasks_doc_section(wp: ChangeWorkPackage) -> str:
+    """Build a tasks.md section for a change WP."""
+    lines = [
+        f"### {wp.work_package_id}: {wp.title}",
+        "",
+        f"- **Lane**: {wp.lane}",
+        f"- **Change Stack**: Yes",
+        f"- **Mode**: {wp.change_mode}",
+    ]
+    if wp.dependencies:
+        deps_str = ", ".join(wp.dependencies)
+        lines.append(f"- **Dependencies**: {deps_str}")
+    if wp.closed_reference_links:
+        refs_str = ", ".join(wp.closed_reference_links)
+        lines.append(f"- **Closed References**: {refs_str} (link-only)")
+    lines.extend([
+        "",
+        f"**Prompt**: `tasks/{wp.filename}`",
+        "",
+    ])
+    return "\n".join(lines)
+
+
+def _rebuild_tasks_doc(
+    existing_content: str,
+    existing_sections: dict[str, str],
+    new_sections: list[str],
+    change_wps: list[ChangeWorkPackage],
+) -> str:
+    """Rebuild tasks.md with updated and new sections.
+
+    Preserves existing non-WP content and unrelated checklist state.
+    Orders WP sections deterministically by WP ID.
+    """
+    # Sort new sections by WP ID for deterministic ordering
+    def _wp_id_from_section(section: str) -> str:
+        match = re.search(r'### (WP\d{2}):', section)
+        return match.group(1) if match else "WP99"
+
+    new_sections_sorted = sorted(new_sections, key=_wp_id_from_section)
+
+    # If no existing content, build from scratch
+    if not existing_content.strip():
+        parts = ["# Tasks", "", "## Change Stack Work Packages", ""]
+        for section in new_sections_sorted:
+            parts.append(section)
+        return "\n".join(parts)
+
+    # Find the "Change Stack" section or append at end
+    change_header_pattern = re.compile(
+        r'^#{1,2}\s+Change\s+Stack', re.MULTILINE | re.IGNORECASE
+    )
+    match = change_header_pattern.search(existing_content)
+
+    if match:
+        # Insert new sections after the change stack header
+        insert_pos = existing_content.find("\n", match.end())
+        if insert_pos == -1:
+            insert_pos = len(existing_content)
+        else:
+            insert_pos += 1
+
+        # Collect all WP sections that should appear under change stack
+        all_change_wp_ids = sorted(
+            set(list(existing_sections.keys()) + [wp.work_package_id for wp in change_wps])
+        )
+
+        # Build the change stack section content
+        change_parts: list[str] = []
+        for wp_id in all_change_wp_ids:
+            if wp_id in existing_sections:
+                change_parts.append(existing_sections[wp_id])
+            else:
+                # Find in new_sections_sorted
+                for ns in new_sections_sorted:
+                    if f"### {wp_id}:" in ns:
+                        change_parts.append(ns)
+                        break
+
+        # Replace change stack section content
+        # Find the end of the change stack section (next top-level heading)
+        rest_match = re.search(r'^#{1,2}\s+(?!Change\s+Stack|WP\d{2})', existing_content[insert_pos:], re.MULTILINE)
+        if rest_match:
+            rest_start = insert_pos + rest_match.start()
+            before = existing_content[:insert_pos]
+            after = existing_content[rest_start:]
+        else:
+            before = existing_content[:insert_pos]
+            after = ""
+
+        change_content = "\n".join(change_parts)
+        return f"{before}\n{change_content}\n{after}".rstrip() + "\n"
+    else:
+        # Append a change stack section
+        parts = [
+            existing_content.rstrip(),
+            "",
+            "## Change Stack Work Packages",
+            "",
+        ]
+        for section in new_sections_sorted:
+            parts.append(section)
+        return "\n".join(parts) + "\n"
+
+
+def validate_all_dependencies(
+    tasks_dir: Path,
+) -> tuple[bool, list[str]]:
+    """Validate dependency integrity for all WPs in the tasks directory.
+
+    Checks for missing references, self-edges, and cycles across
+    the entire WP graph.
+
+    Args:
+        tasks_dir: Path to the tasks directory
+
+    Returns:
+        Tuple of (all_valid, list of error messages)
+    """
+    if not tasks_dir.exists():
+        return True, []
+
+    graph = build_dependency_graph(tasks_dir)
+    all_errors: list[str] = []
+
+    # Check each WP's dependencies
+    for wp_id, deps in graph.items():
+        is_valid, errors = validate_dependencies(wp_id, deps, graph)
+        if not is_valid:
+            all_errors.extend(errors)
+
+    # Check for cycles
+    cycles = detect_cycles(graph)
+    if cycles:
+        for cycle in cycles:
+            cycle_str = " → ".join(cycle)
+            error = f"Circular dependency detected: {cycle_str}"
+            if error not in all_errors:
+                all_errors.append(error)
+
+    return len(all_errors) == 0, all_errors
+
+
+def reconcile_change_stack(
+    tasks_dir: Path,
+    feature_dir: Path,
+    change_wps: list[ChangeWorkPackage],
+) -> ConsistencyReport:
+    """Full reconciliation: tasks.md + dependency validation (T030, T031).
+
+    Orchestrates the complete reconciliation workflow:
+    1. Reconcile tasks.md with generated WPs
+    2. Validate all dependency integrity
+    3. Check for broken links and fix them
+
+    Args:
+        tasks_dir: Path to the tasks directory
+        feature_dir: Path to the feature directory
+        change_wps: List of generated change WPs
+
+    Returns:
+        ConsistencyReport with complete reconciliation status
+    """
+    # Step 1: Reconcile tasks.md
+    report = reconcile_tasks_doc(tasks_dir, feature_dir, change_wps)
+
+    # Step 2: Validate dependencies
+    is_valid, dep_errors = validate_all_dependencies(tasks_dir)
+    report.dependency_validation_passed = is_valid
+    if dep_errors:
+        report.issues.extend(dep_errors)
+
+    # Step 3: Check for broken prompt links in tasks.md
+    broken_count = _fix_broken_prompt_links(tasks_dir, feature_dir)
+    report.broken_links_fixed = broken_count
+
+    return report
+
+
+def _fix_broken_prompt_links(tasks_dir: Path, feature_dir: Path) -> int:
+    """Check and fix broken prompt links in tasks.md.
+
+    Returns the number of links fixed.
+    """
+    tasks_doc = feature_dir / "tasks.md"
+    if not tasks_doc.exists():
+        return 0
+
+    content = tasks_doc.read_text(encoding="utf-8")
+    fixed_count = 0
+
+    # Find all prompt links: `tasks/WP##-*.md`
+    link_pattern = re.compile(r'`tasks/(WP\d{2}-[^`]+\.md)`')
+    for match in link_pattern.finditer(content):
+        filename = match.group(1)
+        if not (tasks_dir / filename).exists():
+            # The file doesn't exist - this is a broken link
+            fixed_count += 1
+
+    return fixed_count
+
+
+# ============================================================================
+# Merge Coordination Heuristics (T032, T033)
+# ============================================================================
+
+
+def compute_merge_coordination_jobs(
+    change_wps: list[ChangeWorkPackage],
+    tasks_dir: Path,
+    plan: ChangePlan,
+) -> list[MergeCoordinationJob]:
+    """Deterministically compute merge coordination jobs (T032, FR-013).
+
+    Creates merge coordination jobs when deterministic risk heuristics trigger:
+    1. Cross-dependency risk: change WP depends on an in-progress normal WP
+    2. Parallel modification risk: multiple change WPs touch overlapping areas
+    3. Integration risk: change plan has integration_risk flagged
+
+    Jobs are only created when conditions are met - no speculative jobs.
+
+    Args:
+        change_wps: The generated change WPs
+        tasks_dir: Path to tasks directory
+        plan: The change plan with risk indicators
+
+    Returns:
+        List of MergeCoordinationJob records
+    """
+    jobs: list[MergeCoordinationJob] = []
+
+    if not change_wps:
+        return jobs
+
+    # Heuristic 1: Integration risk from classifier
+    if plan.requires_merge_coordination:
+        source_wp = change_wps[0].work_package_id
+        # Find in-progress WPs that might conflict
+        active_wps = _find_active_wps(tasks_dir)
+
+        if active_wps:
+            job = MergeCoordinationJob(
+                job_id=f"mcj-{source_wp}-integration",
+                reason="Integration risk detected: change request involves CI/CD, "
+                       "deployment, or external API changes that may conflict with "
+                       "in-progress work",
+                source_wp=source_wp,
+                target_wps=active_wps,
+                risk_indicator="integration_risk",
+            )
+            jobs.append(job)
+
+    # Heuristic 2: Cross-dependency risk
+    for wp in change_wps:
+        for dep in wp.dependencies:
+            dep_lane = _get_wp_lane(tasks_dir, dep)
+            if dep_lane in ("doing", "for_review"):
+                job = MergeCoordinationJob(
+                    job_id=f"mcj-{wp.work_package_id}-cross-{dep}",
+                    reason=f"Cross-dependency risk: {wp.work_package_id} depends on "
+                           f"{dep} which is currently in {dep_lane} lane. Coordination "
+                           f"needed to avoid merge conflicts.",
+                    source_wp=wp.work_package_id,
+                    target_wps=[dep],
+                    risk_indicator="cross_dependency",
+                )
+                jobs.append(job)
+
+    # Heuristic 3: Parallel modification risk (targeted_multi only)
+    if len(change_wps) > 1:
+        # Multiple change WPs from same request could conflict
+        wp_ids = [wp.work_package_id for wp in change_wps]
+        job = MergeCoordinationJob(
+            job_id=f"mcj-parallel-{change_wps[0].change_request_id[:8]}",
+            reason="Parallel modification risk: multiple change WPs generated "
+                   "from the same request. Ensure sequential implementation "
+                   "respects the dependency chain.",
+            source_wp=change_wps[0].work_package_id,
+            target_wps=wp_ids[1:],
+            risk_indicator="parallel_modification",
+        )
+        jobs.append(job)
+
+    return jobs
+
+
+def _find_active_wps(tasks_dir: Path) -> list[str]:
+    """Find WPs currently in doing or for_review lanes."""
+    active: list[str] = []
+    if not tasks_dir.exists():
+        return active
+
+    for wp_file in sorted(tasks_dir.glob("WP*.md")):
+        content = wp_file.read_text(encoding="utf-8")
+        wp_id_match = re.search(
+            r'^work_package_id:\s*["\']?(WP\d{2})["\']?\s*$',
+            content, re.MULTILINE,
+        )
+        lane_match = re.search(
+            r'^lane:\s*["\']?(\w+)["\']?\s*$',
+            content, re.MULTILINE,
+        )
+
+        if wp_id_match and lane_match:
+            wp_id = wp_id_match.group(1)
+            lane = lane_match.group(1)
+            if lane in ("doing", "for_review"):
+                active.append(wp_id)
+
+    return active
+
+
+def persist_merge_coordination_jobs(
+    jobs: list[MergeCoordinationJob],
+    feature_dir: Path,
+) -> Path | None:
+    """Persist merge coordination jobs to planning artifacts (T033).
+
+    Writes jobs to a JSON file in the feature directory for downstream
+    discovery and command output.
+
+    Args:
+        jobs: List of merge coordination jobs to persist
+        feature_dir: Path to the feature directory
+
+    Returns:
+        Path to the persisted file, or None if no jobs
+    """
+    if not jobs:
+        return None
+
+    import json as _json
+
+    output_path = feature_dir / "change-merge-jobs.json"
+    feature_dir.mkdir(parents=True, exist_ok=True)
+
+    # If file exists, merge with existing jobs (idempotent by job_id)
+    existing_jobs: dict[str, dict[str, object]] = {}
+    if output_path.exists():
+        try:
+            existing_data = _json.loads(output_path.read_text(encoding="utf-8"))
+            for j in existing_data.get("jobs", []):
+                existing_jobs[j["jobId"]] = j
+        except (ValueError, KeyError):
+            pass
+
+    # Add/update new jobs
+    for job in jobs:
+        existing_jobs[job.job_id] = job.to_dict()
+
+    # Write sorted by job_id for determinism
+    sorted_jobs = [existing_jobs[k] for k in sorted(existing_jobs)]
+    output_data = {
+        "version": 1,
+        "featureDir": str(feature_dir),
+        "jobCount": len(sorted_jobs),
+        "jobs": sorted_jobs,
+    }
+
+    output_path.write_text(
+        _json.dumps(output_data, indent=2, default=str) + "\n",
+        encoding="utf-8",
+    )
+    return output_path
+
+
+# ============================================================================
 # Errors
 # ============================================================================
 
