@@ -350,8 +350,12 @@ class TestApplyContinueGate:
                 assert result.exit_code == 1
                 assert "complexity threshold" in data["message"]
 
-    def test_apply_allows_high_complexity_with_continue(self) -> None:
+    def test_apply_allows_high_complexity_with_continue(self, tmp_path: Path) -> None:
         """Apply should allow high complexity requests with --continue."""
+        # Create tasks dir for stash routing
+        tasks_dir = tmp_path / "kitty-specs" / "029-test" / "tasks"
+        tasks_dir.mkdir(parents=True)
+
         with (
             patch(
                 "specify_cli.cli.commands.agent.change.locate_project_root"
@@ -359,8 +363,16 @@ class TestApplyContinueGate:
             patch(
                 "specify_cli.cli.commands.agent.change.detect_feature_slug"
             ) as mock_slug,
+            patch(
+                "specify_cli.core.change_stack.get_current_branch",
+                return_value="029-test",
+            ),
+            patch(
+                "specify_cli.core.change_stack._get_main_repo_root",
+                return_value=tmp_path,
+            ),
         ):
-            mock_root.return_value = Path("/tmp/fake-repo")
+            mock_root.return_value = tmp_path
             mock_slug.return_value = "029-test"
 
             result = runner.invoke(
@@ -391,8 +403,12 @@ class TestApplyContinueGate:
         )
         assert result.exit_code != 0
 
-    def test_apply_simple_passes_without_continue(self) -> None:
+    def test_apply_simple_passes_without_continue(self, tmp_path: Path) -> None:
         """Apply with simple complexity should pass without --continue."""
+        # Create tasks dir for stash routing
+        tasks_dir = tmp_path / "kitty-specs" / "029-test" / "tasks"
+        tasks_dir.mkdir(parents=True)
+
         with (
             patch(
                 "specify_cli.cli.commands.agent.change.locate_project_root"
@@ -400,8 +416,16 @@ class TestApplyContinueGate:
             patch(
                 "specify_cli.cli.commands.agent.change.detect_feature_slug"
             ) as mock_slug,
+            patch(
+                "specify_cli.core.change_stack.get_current_branch",
+                return_value="029-test",
+            ),
+            patch(
+                "specify_cli.core.change_stack._get_main_repo_root",
+                return_value=tmp_path,
+            ),
         ):
-            mock_root.return_value = Path("/tmp/fake-repo")
+            mock_root.return_value = tmp_path
             mock_slug.return_value = "029-test"
 
             result = runner.invoke(

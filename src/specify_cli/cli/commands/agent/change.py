@@ -13,8 +13,11 @@ from specify_cli.core.change_classifier import ComplexityClassification
 from specify_cli.core.change_stack import (
     ChangeStackError,
     ValidationState,
+    generate_change_work_packages,
     resolve_stash,
+    synthesize_change_plan,
     validate_change_request,
+    write_change_work_packages,
 )
 from specify_cli.core.feature_detection import (
     FeatureDetectionError,
@@ -211,25 +214,63 @@ def apply(
         )
         raise typer.Exit(1)
 
-    # Stubbed response - actual WP synthesis in WP04-WP06
-    result: dict[str, object] = {
-        "requestId": request_id,
-        "createdWorkPackages": [],
-        "closedReferenceLinks": [],
-        "mergeCoordinationJobs": [],
-        "consistency": {
-            "updatedTasksDoc": False,
-            "dependencyValidationPassed": True,
-            "brokenLinksFixed": 0,
-            "issues": [],
-        },
-        "status": "stubbed",
-        "message": "Apply endpoint registered. Full implementation in WP04-WP06.",
-    }
+    # Re-validate request to get full ChangeRequest if text provided
+    change_req = None
+    if request_text:
+        try:
+            change_req = validate_change_request(
+                request_text=request_text,
+                repo_root=repo_root,
+                feature=feature,
+            )
+            # Override the request_id with the one from preview
+            change_req.request_id = request_id
+        except ChangeStackError as exc:
+            _output_error("validation_failed", str(exc), json_output)
+            raise typer.Exit(1)
 
-    # Include scoring metadata if available
-    if score is not None:
-        result["complexity"] = score.to_dict()
+    if change_req is not None:
+        # Synthesize plan and generate WPs
+        plan = synthesize_change_plan(change_req)
+        wps = generate_change_work_packages(
+            change_req, plan, change_req.stash.stash_path
+        )
+
+        # Write WP files to disk
+        written_paths = write_change_work_packages(wps, change_req.stash.stash_path)
+
+        result: dict[str, object] = {
+            "requestId": request_id,
+            "createdWorkPackages": [wp.to_dict() for wp in wps],
+            "writtenFiles": [str(p) for p in written_paths],
+            "closedReferenceLinks": plan.closed_reference_wp_ids,
+            "mergeCoordinationJobs": [],  # Full implementation in WP06
+            "consistency": {
+                "updatedTasksDoc": False,
+                "dependencyValidationPassed": True,
+                "brokenLinksFixed": 0,
+                "issues": [],
+            },
+            "mode": plan.mode.value,
+        }
+        if score is not None:
+            result["complexity"] = score.to_dict()
+    else:
+        # No request text: legacy/minimal apply (preview-only flow)
+        result = {
+            "requestId": request_id,
+            "createdWorkPackages": [],
+            "closedReferenceLinks": [],
+            "mergeCoordinationJobs": [],
+            "consistency": {
+                "updatedTasksDoc": False,
+                "dependencyValidationPassed": True,
+                "brokenLinksFixed": 0,
+                "issues": [],
+            },
+            "status": "no_request_text",
+            "message": "No --request-text provided. Pass request text for WP synthesis.",
+        }
 
     _output_result(result, json_output)
 
