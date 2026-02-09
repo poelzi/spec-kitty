@@ -204,11 +204,11 @@
 **Estimated Prompt Size**: ~340 lines
 
 ### Included Subtasks
-- [ ] T036 Update implement auto-selection logic in `src/specify_cli/cli/commands/agent/workflow.py` to prioritize ready change WPs
-- [ ] T037 Enforce stop-and-report behavior when pending change WPs exist but none are ready
-- [ ] T038 Add fallback to normal planned WPs only when change stack is empty
-- [ ] T039 Update workflow guidance/output messages to explain selected source and blockers
-- [ ] T040 Add integration tests for ready-stack, blocked-stack, and empty-stack scenarios
+- [x] T036 Update implement auto-selection logic in `src/specify_cli/cli/commands/agent/workflow.py` to prioritize ready change WPs
+- [x] T037 Enforce stop-and-report behavior when pending change WPs exist but none are ready
+- [x] T038 Add fallback to normal planned WPs only when change stack is empty
+- [x] T039 Update workflow guidance/output messages to explain selected source and blockers
+- [x] T040 Add integration tests for ready-stack, blocked-stack, and empty-stack scenarios
 
 ### Implementation Notes
 - Keep output explicit about why a WP was selected or why execution is blocked.
