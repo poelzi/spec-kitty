@@ -14,7 +14,15 @@ from enum import Enum
 from pathlib import Path
 from typing import Optional
 
-from specify_cli.core.change_classifier import ComplexityScore, classify_change_request
+import textwrap
+from datetime import datetime, timezone
+
+from specify_cli.core.change_classifier import (
+    ComplexityScore,
+    PackagingMode,
+    ReviewAttention,
+    classify_change_request,
+)
 from specify_cli.core.git_ops import get_current_branch
 from specify_cli.core.feature_detection import _get_main_repo_root
 from specify_cli.tasks_support import LANES
@@ -466,6 +474,568 @@ def validate_change_request(
         closed_references=closed_refs,
         complexity_score=complexity,
     )
+
+
+# ============================================================================
+# Change Plan and WP Synthesis (T018-T022)
+# ============================================================================
+
+
+@dataclass
+class ChangePlan:
+    """Planner decision layer for decomposition and guardrails.
+
+    Attributes:
+        request_id: Trace ID linking to the ChangeRequest
+        mode: Packaging mode selected deterministically
+        affected_open_wp_ids: Open WPs referenced in the request
+        closed_reference_wp_ids: Closed WPs for link-only context
+        guardrails: User-specified constraints to include in generated WPs
+        requires_merge_coordination: Whether merge coordination jobs are needed
+    """
+    request_id: str
+    mode: PackagingMode
+    affected_open_wp_ids: list[str] = field(default_factory=list)
+    closed_reference_wp_ids: list[str] = field(default_factory=list)
+    guardrails: list[str] = field(default_factory=list)
+    requires_merge_coordination: bool = False
+
+
+@dataclass
+class ChangeWorkPackage:
+    """Generated change WP entry ready to write to the tasks directory.
+
+    Attributes:
+        work_package_id: e.g., "WP09"
+        title: Derived from request text
+        filename: Slugged filename, e.g., "WP09-use-sqlalchemy.md"
+        lane: Always "planned" for generated WPs
+        dependencies: WP IDs this WP depends on
+        change_stack: Always True for change WPs
+        change_request_id: Trace ID to originating request
+        change_mode: Packaging mode label
+        stack_rank: Ordering rank within the change set
+        review_attention: Normal or elevated
+        closed_reference_links: Link-only references to closed WPs
+        body: Full markdown body including frontmatter
+    """
+    work_package_id: str
+    title: str
+    filename: str
+    lane: str = "planned"
+    dependencies: list[str] = field(default_factory=list)
+    change_stack: bool = True
+    change_request_id: str = ""
+    change_mode: str = ""
+    stack_rank: int = 1
+    review_attention: str = "normal"
+    closed_reference_links: list[str] = field(default_factory=list)
+    body: str = ""
+
+    def to_dict(self) -> dict[str, object]:
+        """Serialize to JSON-friendly dictionary."""
+        return {
+            "workPackageId": self.work_package_id,
+            "title": self.title,
+            "filename": self.filename,
+            "lane": self.lane,
+            "dependencies": self.dependencies,
+            "changeStack": self.change_stack,
+            "changeRequestId": self.change_request_id,
+            "changeMode": self.change_mode,
+            "stackRank": self.stack_rank,
+            "reviewAttention": self.review_attention,
+            "closedReferenceLinks": self.closed_reference_links,
+        }
+
+
+def _next_wp_id(tasks_dir: Path) -> str:
+    """Allocate the next available WP ID deterministically (T019).
+
+    Scans existing WP files in the tasks directory (and virtual registry
+    for in-flight batch generation) and returns the next sequential ID.
+    IDs are zero-padded to two digits: WP01, WP02, ..., WP99.
+
+    Args:
+        tasks_dir: Path to the flat tasks directory
+
+    Returns:
+        Next WP ID string, e.g., "WP09"
+    """
+    existing_ids: set[int] = set()
+    if tasks_dir.exists():
+        for f in tasks_dir.glob("WP[0-9][0-9]-*.md"):
+            try:
+                num = int(f.name[2:4])
+                existing_ids.add(num)
+            except ValueError:
+                continue
+
+    # Also check virtual registry for in-flight allocations
+    key = str(tasks_dir)
+    if key in _virtual_wp_registry:
+        for fname in _virtual_wp_registry[key]:
+            try:
+                num = int(fname[2:4])
+                existing_ids.add(num)
+            except (ValueError, IndexError):
+                continue
+
+    next_num = 1
+    while next_num in existing_ids:
+        next_num += 1
+
+    return f"WP{next_num:02d}"
+
+
+def _slugify(text: str, max_length: int = 40) -> str:
+    """Create a URL-safe slug from text for filenames.
+
+    Args:
+        text: Raw text to slugify
+        max_length: Maximum slug length
+
+    Returns:
+        Lowercased, hyphenated slug
+    """
+    slug = re.sub(r'[^a-zA-Z0-9\s-]', '', text.lower())
+    slug = re.sub(r'[\s_]+', '-', slug.strip())
+    slug = re.sub(r'-+', '-', slug)
+    slug = slug.strip('-')
+    if len(slug) > max_length:
+        slug = slug[:max_length].rsplit('-', 1)[0]
+    return slug or "change"
+
+
+def _derive_title(request_text: str, max_length: int = 60) -> str:
+    """Derive a concise WP title from the request text.
+
+    Args:
+        request_text: Original change request
+        max_length: Maximum title length
+
+    Returns:
+        A clean title string
+    """
+    # Take first sentence or first N chars
+    text = request_text.strip()
+    # Cut at first period/newline if reasonable
+    for sep in ('.', '\n', ';'):
+        idx = text.find(sep)
+        if 10 < idx < max_length:
+            text = text[:idx]
+            break
+
+    if len(text) > max_length:
+        text = text[:max_length].rsplit(' ', 1)[0] + "..."
+
+    return text.strip()
+
+
+def _render_wp_body(
+    wp: ChangeWorkPackage,
+    request_text: str,
+    guardrails: list[str],
+    closed_refs: list[str],
+    implementation_hint: str,
+) -> str:
+    """Render full WP markdown including frontmatter and body (T020-T022).
+
+    Args:
+        wp: The change work package being rendered
+        request_text: Original request text
+        guardrails: Acceptance constraints
+        closed_refs: Closed WP references for link-only context
+        implementation_hint: The spec-kitty implement command hint
+
+    Returns:
+        Complete markdown file content
+    """
+    now = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+    # Build frontmatter
+    deps_yaml = "\n".join(f'  - "{d}"' for d in wp.dependencies) if wp.dependencies else ""
+    closed_refs_yaml = "\n".join(f'  - "{c}"' for c in wp.closed_reference_links) if wp.closed_reference_links else ""
+
+    frontmatter_lines = [
+        "---",
+        f'work_package_id: "{wp.work_package_id}"',
+        f'title: "{wp.title}"',
+        f'lane: "{wp.lane}"',
+    ]
+
+    if deps_yaml:
+        frontmatter_lines.append("dependencies:")
+        frontmatter_lines.append(deps_yaml)
+    else:
+        frontmatter_lines.append("dependencies: []")
+
+    frontmatter_lines.extend([
+        f"change_stack: true",
+        f'change_request_id: "{wp.change_request_id}"',
+        f'change_mode: "{wp.change_mode}"',
+        f"stack_rank: {wp.stack_rank}",
+        f'review_attention: "{wp.review_attention}"',
+    ])
+
+    if closed_refs_yaml:
+        frontmatter_lines.append("closed_reference_links:")
+        frontmatter_lines.append(closed_refs_yaml)
+
+    frontmatter_lines.extend([
+        'assignee: ""',
+        'agent: ""',
+        'review_status: ""',
+        'reviewed_by: ""',
+        "history:",
+        f'  - timestamp: "{now}"',
+        '    lane: "planned"',
+        '    agent: "change-command"',
+        '    action: "Generated by /spec-kitty.change"',
+        "---",
+    ])
+
+    # Build body
+    body_parts = [
+        f"# {wp.work_package_id}: {wp.title}",
+        "",
+        f"**Implementation command:**",
+        "```bash",
+        implementation_hint,
+        "```",
+        "",
+        "## Change Request",
+        "",
+        f"> {request_text}",
+        "",
+    ]
+
+    # Guardrails (T021)
+    if guardrails:
+        body_parts.extend([
+            "## Acceptance Constraints",
+            "",
+        ])
+        for i, g in enumerate(guardrails, 1):
+            body_parts.append(f"{i}. {g}")
+        body_parts.append("")
+
+    # Closed references
+    if closed_refs:
+        body_parts.extend([
+            "## Historical Context (Closed References)",
+            "",
+            "The following closed work packages are referenced for context only (not reopened):",
+            "",
+        ])
+        for ref in closed_refs:
+            body_parts.append(f"- {ref}")
+        body_parts.append("")
+
+    # Implementation guidance
+    body_parts.extend([
+        "## Implementation Guidance",
+        "",
+        "Implement the change described above. Follow the existing codebase patterns.",
+        "",
+    ])
+
+    # Final testing task (T021 - always present)
+    body_parts.extend([
+        "## Final Testing Task",
+        "",
+        "**REQUIRED**: Before marking this WP as done:",
+        "",
+        "1. Run existing tests to verify no regressions: `pytest tests/`",
+        "2. Add tests covering the changes made in this WP",
+        "3. Verify all tests pass before moving to `for_review`",
+        "",
+    ])
+
+    # Activity log
+    body_parts.extend([
+        "## Activity Log",
+        "",
+        f"- {now} - change-command - lane=planned - Generated by /spec-kitty.change",
+        "",
+    ])
+
+    frontmatter = "\n".join(frontmatter_lines)
+    body = "\n".join(body_parts)
+
+    return f"{frontmatter}\n\n{body}"
+
+
+def _build_implementation_hint(wp_id: str, dependencies: list[str]) -> str:
+    """Build the spec-kitty implement command hint (T022).
+
+    Args:
+        wp_id: Work package ID
+        dependencies: List of dependency WP IDs
+
+    Returns:
+        The implementation command string
+    """
+    if dependencies:
+        # Use the last dependency as --base (most recent in chain)
+        base = dependencies[-1]
+        return f"spec-kitty implement {wp_id} --base {base}"
+    return f"spec-kitty implement {wp_id}"
+
+
+def _extract_guardrails(request_text: str) -> list[str]:
+    """Extract guardrails/constraints from request text.
+
+    Looks for explicit constraint language in the request. Returns
+    a default guardrail if none are found.
+
+    Args:
+        request_text: The change request text
+
+    Returns:
+        List of guardrail strings
+    """
+    guardrails: list[str] = []
+    text_lower = request_text.lower()
+
+    # Check for "must" / "must not" / "do not" / "never" / "always" patterns
+    constraint_patterns = [
+        re.compile(r'(?:must|should)\s+(?:not\s+)?(.{10,80}?)(?:\.|$)', re.IGNORECASE),
+        re.compile(r'(?:do not|don\'t|never)\s+(.{10,60}?)(?:\.|$)', re.IGNORECASE),
+        re.compile(r'(?:always)\s+(.{10,60}?)(?:\.|$)', re.IGNORECASE),
+        re.compile(r'(?:without)\s+(.{10,60}?)(?:\.|$)', re.IGNORECASE),
+    ]
+
+    for pattern in constraint_patterns:
+        for match in pattern.finditer(request_text):
+            guardrails.append(match.group(0).strip().rstrip('.'))
+
+    if not guardrails:
+        guardrails.append("Ensure existing tests continue to pass")
+
+    return guardrails
+
+
+def synthesize_change_plan(
+    change_req: ChangeRequest,
+) -> ChangePlan:
+    """Create a change plan from a validated change request (T018).
+
+    Deterministically selects the packaging mode and extracts
+    guardrails from the request text.
+
+    Args:
+        change_req: Validated change request
+
+    Returns:
+        ChangePlan with mode selection and guardrails
+    """
+    score = change_req.complexity_score
+    mode = score.proposed_mode if score is not None else PackagingMode.SINGLE_WP
+
+    # Extract closed references
+    closed_refs = (
+        change_req.closed_references.closed_wp_ids
+        if change_req.closed_references.has_closed_references
+        else []
+    )
+
+    # Extract guardrails from request text
+    guardrails = _extract_guardrails(change_req.raw_text)
+
+    # Determine if merge coordination is needed (integration risk > 0)
+    requires_merge = (
+        score is not None and score.integration_risk_score > 0
+    )
+
+    return ChangePlan(
+        request_id=change_req.request_id,
+        mode=mode,
+        affected_open_wp_ids=[],  # Populated by apply command in WP05
+        closed_reference_wp_ids=closed_refs,
+        guardrails=guardrails,
+        requires_merge_coordination=requires_merge,
+    )
+
+
+def generate_change_work_packages(
+    change_req: ChangeRequest,
+    plan: ChangePlan,
+    tasks_dir: Path,
+) -> list[ChangeWorkPackage]:
+    """Generate change work packages from a plan (T019-T022).
+
+    Creates one or more WP files based on the packaging mode:
+    - single_wp: One WP with all tasks
+    - orchestration: One coordinating WP
+    - targeted_multi: Multiple focused WPs (2-3 based on scope)
+
+    Args:
+        change_req: The validated change request
+        plan: The change plan with mode and guardrails
+        tasks_dir: Path to the tasks directory for ID allocation
+
+    Returns:
+        List of ChangeWorkPackage ready to be written
+    """
+    score = change_req.complexity_score
+    review_att = score.review_attention.value if score is not None else "normal"
+    mode_label = _mode_to_frontmatter_label(plan.mode)
+
+    if plan.mode == PackagingMode.TARGETED_MULTI:
+        return _generate_targeted_multi(
+            change_req, plan, tasks_dir, review_att, mode_label,
+        )
+
+    # single_wp and orchestration both produce one WP
+    # (orchestration gets a different title prefix)
+    wp_id = _next_wp_id(tasks_dir)
+    title = _derive_title(change_req.raw_text)
+    if plan.mode == PackagingMode.ORCHESTRATION:
+        title = f"Orchestrate: {title}"
+
+    slug = _slugify(title)
+    filename = f"{wp_id}-{slug}.md"
+
+    hint = _build_implementation_hint(wp_id, [])
+    wp = ChangeWorkPackage(
+        work_package_id=wp_id,
+        title=title,
+        filename=filename,
+        lane="planned",
+        dependencies=[],
+        change_stack=True,
+        change_request_id=change_req.request_id,
+        change_mode=mode_label,
+        stack_rank=1,
+        review_attention=review_att,
+        closed_reference_links=plan.closed_reference_wp_ids,
+    )
+    wp.body = _render_wp_body(
+        wp, change_req.raw_text, plan.guardrails,
+        plan.closed_reference_wp_ids, hint,
+    )
+    return [wp]
+
+
+def _generate_targeted_multi(
+    change_req: ChangeRequest,
+    plan: ChangePlan,
+    tasks_dir: Path,
+    review_att: str,
+    mode_label: str,
+) -> list[ChangeWorkPackage]:
+    """Generate multiple targeted WPs for parallelizable changes.
+
+    Splits the request into 2-3 WPs based on scope breadth score.
+
+    Args:
+        change_req: The validated request
+        plan: The change plan
+        tasks_dir: Path to tasks directory
+        review_att: Review attention level
+        mode_label: Frontmatter mode label
+
+    Returns:
+        List of 2-3 ChangeWorkPackage entries
+    """
+    score = change_req.complexity_score
+    # Determine WP count: 2 for moderate scope, 3 for wide scope
+    wp_count = 3 if (score and score.scope_breadth_score >= 3) else 2
+
+    wps: list[ChangeWorkPackage] = []
+    base_title = _derive_title(change_req.raw_text, max_length=45)
+
+    for i in range(wp_count):
+        wp_id = _next_wp_id(tasks_dir)
+        rank = i + 1
+        suffix = f"(part {rank}/{wp_count})"
+        title = f"{base_title} {suffix}"
+        slug = _slugify(title)
+        filename = f"{wp_id}-{slug}.md"
+
+        # First WP has no deps, subsequent depend on predecessor
+        deps = [wps[i - 1].work_package_id] if i > 0 else []
+        hint = _build_implementation_hint(wp_id, deps)
+
+        wp = ChangeWorkPackage(
+            work_package_id=wp_id,
+            title=title,
+            filename=filename,
+            lane="planned",
+            dependencies=deps,
+            change_stack=True,
+            change_request_id=change_req.request_id,
+            change_mode=mode_label,
+            stack_rank=rank,
+            review_attention=review_att,
+            closed_reference_links=plan.closed_reference_wp_ids if i == 0 else [],
+        )
+        wp.body = _render_wp_body(
+            wp, change_req.raw_text, plan.guardrails,
+            plan.closed_reference_wp_ids if i == 0 else [],
+            hint,
+        )
+
+        # "Create" the file virtually so next _next_wp_id sees it
+        # We do this by writing a placeholder (the caller writes the real files)
+        # For ID allocation, we track in-memory
+        _register_virtual_wp(tasks_dir, wp_id, filename)
+        wps.append(wp)
+
+    return wps
+
+
+# Track virtually allocated WP IDs during multi-WP generation
+_virtual_wp_registry: dict[str, set[str]] = {}
+
+
+def _register_virtual_wp(tasks_dir: Path, wp_id: str, filename: str) -> None:
+    """Register a virtual WP file for ID collision avoidance during batch generation."""
+    key = str(tasks_dir)
+    if key not in _virtual_wp_registry:
+        _virtual_wp_registry[key] = set()
+    _virtual_wp_registry[key].add(filename)
+
+
+def _clear_virtual_registry() -> None:
+    """Clear the virtual WP registry (call after write is complete)."""
+    _virtual_wp_registry.clear()
+
+
+def _mode_to_frontmatter_label(mode: PackagingMode) -> str:
+    """Convert PackagingMode enum to frontmatter label."""
+    return {
+        PackagingMode.SINGLE_WP: "single",
+        PackagingMode.ORCHESTRATION: "orchestration",
+        PackagingMode.TARGETED_MULTI: "targeted",
+    }[mode]
+
+
+def write_change_work_packages(
+    wps: list[ChangeWorkPackage],
+    tasks_dir: Path,
+) -> list[Path]:
+    """Write generated change work packages to disk.
+
+    Creates the tasks directory if it doesn't exist, then writes
+    each WP file.
+
+    Args:
+        wps: List of ChangeWorkPackage with rendered bodies
+        tasks_dir: Target directory
+
+    Returns:
+        List of paths to written files
+    """
+    tasks_dir.mkdir(parents=True, exist_ok=True)
+    written: list[Path] = []
+    for wp in wps:
+        path = tasks_dir / wp.filename
+        path.write_text(wp.body, encoding="utf-8")
+        written.append(path)
+    _clear_virtual_registry()
+    return written
 
 
 # ============================================================================
