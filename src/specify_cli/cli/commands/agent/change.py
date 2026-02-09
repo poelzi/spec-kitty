@@ -9,6 +9,12 @@ from typing import Optional
 import typer
 from typing_extensions import Annotated
 
+from specify_cli.core.change_stack import (
+    ChangeStackError,
+    ValidationState,
+    validate_change_request,
+    resolve_stash,
+)
 from specify_cli.core.feature_detection import (
     FeatureDetectionError,
     detect_feature_slug,
@@ -39,6 +45,22 @@ def _output_error(error: str, message: str, as_json: bool) -> None:
         print(f"Error: {error} - {message}")
 
 
+def _resolve_repo() -> Path:
+    """Resolve repo root.
+
+    Returns:
+        Repository root path
+
+    Raises:
+        typer.Exit: If resolution fails
+    """
+    try:
+        return find_repo_root()
+    except TaskCliError as exc:
+        print(f"Error: {exc}")
+        raise typer.Exit(1)
+
+
 def _resolve_feature(feature: Optional[str]) -> tuple[Path, str]:
     """Resolve repo root and feature slug.
 
@@ -48,11 +70,7 @@ def _resolve_feature(feature: Optional[str]) -> tuple[Path, str]:
     Raises:
         typer.Exit: If resolution fails
     """
-    try:
-        repo_root = find_repo_root()
-    except TaskCliError as exc:
-        print(f"Error: {exc}")
-        raise typer.Exit(1)
+    repo_root = _resolve_repo()
 
     try:
         feature_slug = (feature or detect_feature_slug(repo_root, cwd=Path.cwd())).strip()
@@ -80,15 +98,28 @@ def preview(
         spec-kitty agent change preview "use SQLAlchemy instead of raw SQL"
         spec-kitty agent change preview "add caching" --json
     """
-    repo_root, feature_slug = _resolve_feature(feature)
+    repo_root = _resolve_repo()
 
-    # Stubbed response - actual implementation in WP02-WP04
+    # Validate and route the change request
+    try:
+        change_req = validate_change_request(
+            request_text=request_text,
+            repo_root=repo_root,
+            feature=feature,
+        )
+    except ChangeStackError as exc:
+        _output_error("stash_resolution_failed", str(exc), json_output)
+        raise typer.Exit(1)
+
+    # Build preview response
+    requires_clarification = change_req.validation_state == ValidationState.AMBIGUOUS
+
     result: dict[str, object] = {
-        "requestId": "stub-preview-id",
-        "stashKey": feature_slug,
-        "stashScope": "feature",
-        "stashPath": str(repo_root / "kitty-specs" / feature_slug / "tasks"),
-        "validationState": "valid",
+        "requestId": change_req.request_id,
+        "stashKey": change_req.stash.stash_key,
+        "stashScope": change_req.stash.scope.value,
+        "stashPath": str(change_req.stash.stash_path),
+        "validationState": change_req.validation_state.value,
         "complexity": {
             "scopeBreadthScore": 0,
             "couplingScore": 0,
@@ -102,11 +133,16 @@ def preview(
         "proposedMode": "single_wp",
         "warningRequired": False,
         "warningMessage": None,
-        "requiresClarification": False,
-        "clarificationPrompt": None,
-        "status": "stubbed",
-        "message": "Preview endpoint registered. Full implementation in WP02-WP04.",
+        "requiresClarification": requires_clarification,
+        "clarificationPrompt": change_req.ambiguity.clarification_prompt,
     }
+
+    # Include closed reference info if present
+    if change_req.closed_references.has_closed_references:
+        result["closedReferences"] = {
+            "wpIds": change_req.closed_references.closed_wp_ids,
+            "linkOnly": True,
+        }
 
     _output_result(result, json_output)
 
