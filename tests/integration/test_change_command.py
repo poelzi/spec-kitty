@@ -78,9 +78,10 @@ class TestAgentChangePreview:
     def test_preview_returns_json(self):
         """Preview should return structured JSON with required fields."""
         with patch("specify_cli.cli.commands.agent.change.find_repo_root") as mock_root, \
-             patch("specify_cli.cli.commands.agent.change.detect_feature_slug") as mock_slug:
+             patch("specify_cli.core.change_stack.get_current_branch", return_value="029-test-feature"), \
+             patch("specify_cli.core.change_stack._get_main_repo_root") as mock_main:
             mock_root.return_value = Path("/tmp/fake-repo")
-            mock_slug.return_value = "029-test-feature"
+            mock_main.return_value = Path("/tmp/fake-repo")
 
             result = runner.invoke(
                 agent_change_app,
@@ -93,14 +94,14 @@ class TestAgentChangePreview:
             assert "validationState" in data
             assert "complexity" in data
             assert "proposedMode" in data
-            assert data["status"] == "stubbed"
 
     def test_preview_complexity_fields(self):
         """Preview complexity assessment should have all scoring fields."""
         with patch("specify_cli.cli.commands.agent.change.find_repo_root") as mock_root, \
-             patch("specify_cli.cli.commands.agent.change.detect_feature_slug") as mock_slug:
+             patch("specify_cli.core.change_stack.get_current_branch", return_value="029-test-feature"), \
+             patch("specify_cli.core.change_stack._get_main_repo_root") as mock_main:
             mock_root.return_value = Path("/tmp/fake-repo")
-            mock_slug.return_value = "029-test-feature"
+            mock_main.return_value = Path("/tmp/fake-repo")
 
             result = runner.invoke(
                 agent_change_app,
