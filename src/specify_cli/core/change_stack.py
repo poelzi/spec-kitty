@@ -14,6 +14,7 @@ from enum import Enum
 from pathlib import Path
 from typing import Optional
 
+from specify_cli.core.change_classifier import ComplexityScore, classify_change_request
 from specify_cli.core.git_ops import get_current_branch
 from specify_cli.core.feature_detection import _get_main_repo_root
 from specify_cli.tasks_support import LANES
@@ -136,6 +137,7 @@ class ChangeRequest:
         validation_state: Current validation state
         ambiguity: Ambiguity analysis result
         closed_references: Closed WP reference check result
+        complexity_score: Deterministic complexity scoring result (FR-009)
     """
     request_id: str
     raw_text: str
@@ -144,6 +146,7 @@ class ChangeRequest:
     validation_state: ValidationState
     ambiguity: AmbiguityResult
     closed_references: ClosedReferenceCheck
+    complexity_score: Optional[ComplexityScore] = None
 
 
 # ============================================================================
@@ -441,6 +444,10 @@ def validate_change_request(
     feature_slug = feature or stash.stash_key
     closed_refs = check_closed_references(request_text, repo_root, feature_slug)
 
+    # Step 4: Classify complexity (FR-009) - runs even for ambiguous requests
+    # so preview can show the score breakdown
+    complexity = classify_change_request(request_text)
+
     # Determine overall validation state
     if ambiguity.is_ambiguous:
         state = ValidationState.AMBIGUOUS
@@ -457,6 +464,7 @@ def validate_change_request(
         validation_state=state,
         ambiguity=ambiguity,
         closed_references=closed_refs,
+        complexity_score=complexity,
     )
 
 
