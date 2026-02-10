@@ -155,7 +155,13 @@ class TestAgentChangeApply:
 
             result = runner.invoke(
                 agent_change_app,
-                ["apply", "test-request-id", "--json"],
+                [
+                    "apply",
+                    "test-request-id",
+                    "--request-text",
+                    "fix typo in README",
+                    "--json",
+                ],
             )
             assert result.exit_code == 0
             data = json.loads(result.output)

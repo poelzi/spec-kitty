@@ -164,9 +164,12 @@ def preview(
 def apply(
     request_id: Annotated[str, typer.Argument(help="Request ID from preview step")],
     request_text: Annotated[
-        Optional[str],
-        typer.Option("--request-text", help="Original request text (for re-scoring)"),
-    ] = None,
+        str,
+        typer.Option(
+            "--request-text",
+            help="Original request text (required for complexity gating)",
+        ),
+    ] = ...,
     feature: Annotated[
         Optional[str], typer.Option("--feature", help="Feature slug (auto-detected)")
     ] = None,
@@ -188,28 +191,25 @@ def apply(
     is required (FR-010, SC-003). Without it, apply is blocked.
 
     Examples:
-        spec-kitty agent change apply "preview-id-123"
-        spec-kitty agent change apply "preview-id-123" --continue --json
-        spec-kitty agent change apply "id" --request-text "replace ORM" --continue
+        spec-kitty agent change apply "preview-id-123" --request-text "use SQLAlchemy"
+        spec-kitty agent change apply "preview-id-123" --request-text "replace ORM" --continue --json
     """
     repo_root, feature_slug = _resolve_feature(feature)
 
-    # FR-010/FR-011: Re-score if request text provided, enforce continue gate
+    # FR-010/FR-011: Score complexity and enforce continue gate
     from specify_cli.core.change_classifier import classify_change_request as _classify
 
-    score = None
-    if request_text:
-        score = _classify(request_text, continued_after_warning=continue_after_warning)
-        if score.recommend_specify and not continue_after_warning:
-            _output_error(
-                "high_complexity_blocked",
-                "Request exceeds complexity threshold (score {}/10, classification: {}). "
-                "Use --continue to proceed or use /spec-kitty.specify for full planning.".format(
-                    score.total_score, score.classification.value
-                ),
-                json_output,
-            )
-            raise typer.Exit(1)
+    score = _classify(request_text, continued_after_warning=continue_after_warning)
+    if score.recommend_specify and not continue_after_warning:
+        _output_error(
+            "high_complexity_blocked",
+            "Request exceeds complexity threshold (score {}/10, classification: {}). "
+            "Use --continue to proceed or use /spec-kitty.specify for full planning.".format(
+                score.total_score, score.classification.value
+            ),
+            json_output,
+        )
+        raise typer.Exit(1)
 
     # Stubbed response - actual WP synthesis in WP04-WP06
     result: dict[str, object] = {

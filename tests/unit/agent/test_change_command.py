@@ -225,15 +225,26 @@ class TestPreviewComplexityIntegration:
 
     def test_preview_includes_real_complexity_scores(self) -> None:
         """Preview should include real (non-zero) complexity scores from classifier."""
-        with patch("specify_cli.cli.commands.agent.change.find_repo_root") as mock_root, \
-             patch("specify_cli.core.change_stack.get_current_branch", return_value="029-test"), \
-             patch("specify_cli.core.change_stack._get_main_repo_root") as mock_main:
+        with (
+            patch(
+                "specify_cli.cli.commands.agent.change.locate_project_root"
+            ) as mock_root,
+            patch(
+                "specify_cli.core.change_stack.get_current_branch",
+                return_value="029-test",
+            ),
+            patch("specify_cli.core.change_stack._get_main_repo_root") as mock_main,
+        ):
             mock_root.return_value = Path("/tmp/fake-repo")
             mock_main.return_value = Path("/tmp/fake-repo")
 
             result = runner.invoke(
                 agent_change_app,
-                ["preview", "add package requests and update the shared config module", "--json"],
+                [
+                    "preview",
+                    "add package requests and update the shared config module",
+                    "--json",
+                ],
             )
             assert result.exit_code == 0
             data = json.loads(result.output)
@@ -248,9 +259,16 @@ class TestPreviewComplexityIntegration:
 
     def test_preview_high_complexity_shows_warning(self) -> None:
         """Preview should show warningRequired for high complexity requests."""
-        with patch("specify_cli.cli.commands.agent.change.find_repo_root") as mock_root, \
-             patch("specify_cli.core.change_stack.get_current_branch", return_value="029-test"), \
-             patch("specify_cli.core.change_stack._get_main_repo_root") as mock_main:
+        with (
+            patch(
+                "specify_cli.cli.commands.agent.change.locate_project_root"
+            ) as mock_root,
+            patch(
+                "specify_cli.core.change_stack.get_current_branch",
+                return_value="029-test",
+            ),
+            patch("specify_cli.core.change_stack._get_main_repo_root") as mock_main,
+        ):
             mock_root.return_value = Path("/tmp/fake-repo")
             mock_main.return_value = Path("/tmp/fake-repo")
 
@@ -274,9 +292,16 @@ class TestPreviewComplexityIntegration:
 
     def test_preview_simple_no_warning(self) -> None:
         """Simple requests should not trigger a warning."""
-        with patch("specify_cli.cli.commands.agent.change.find_repo_root") as mock_root, \
-             patch("specify_cli.core.change_stack.get_current_branch", return_value="029-test"), \
-             patch("specify_cli.core.change_stack._get_main_repo_root") as mock_main:
+        with (
+            patch(
+                "specify_cli.cli.commands.agent.change.locate_project_root"
+            ) as mock_root,
+            patch(
+                "specify_cli.core.change_stack.get_current_branch",
+                return_value="029-test",
+            ),
+            patch("specify_cli.core.change_stack._get_main_repo_root") as mock_main,
+        ):
             mock_root.return_value = Path("/tmp/fake-repo")
             mock_main.return_value = Path("/tmp/fake-repo")
 
@@ -295,15 +320,22 @@ class TestApplyContinueGate:
 
     def test_apply_blocks_high_complexity_without_continue(self) -> None:
         """Apply should block high complexity requests without --continue."""
-        with patch("specify_cli.cli.commands.agent.change.find_repo_root") as mock_root, \
-             patch("specify_cli.cli.commands.agent.change.detect_feature_slug") as mock_slug:
+        with (
+            patch(
+                "specify_cli.cli.commands.agent.change.locate_project_root"
+            ) as mock_root,
+            patch(
+                "specify_cli.cli.commands.agent.change.detect_feature_slug"
+            ) as mock_slug,
+        ):
             mock_root.return_value = Path("/tmp/fake-repo")
             mock_slug.return_value = "029-test"
 
             result = runner.invoke(
                 agent_change_app,
                 [
-                    "apply", "test-id",
+                    "apply",
+                    "test-id",
                     "--request-text",
                     "replace framework Django with FastAPI, migrate from PostgreSQL to MongoDB, "
                     "update the api contract for all endpoints, modify the deployment pipeline "
@@ -320,15 +352,22 @@ class TestApplyContinueGate:
 
     def test_apply_allows_high_complexity_with_continue(self) -> None:
         """Apply should allow high complexity requests with --continue."""
-        with patch("specify_cli.cli.commands.agent.change.find_repo_root") as mock_root, \
-             patch("specify_cli.cli.commands.agent.change.detect_feature_slug") as mock_slug:
+        with (
+            patch(
+                "specify_cli.cli.commands.agent.change.locate_project_root"
+            ) as mock_root,
+            patch(
+                "specify_cli.cli.commands.agent.change.detect_feature_slug"
+            ) as mock_slug,
+        ):
             mock_root.return_value = Path("/tmp/fake-repo")
             mock_slug.return_value = "029-test"
 
             result = runner.invoke(
                 agent_change_app,
                 [
-                    "apply", "test-id",
+                    "apply",
+                    "test-id",
                     "--request-text",
                     "replace framework Django with FastAPI, migrate from PostgreSQL to MongoDB, "
                     "update the api contract for all endpoints, modify the deployment pipeline "
@@ -344,33 +383,34 @@ class TestApplyContinueGate:
             if "complexity" in data:
                 assert "reviewAttention" in data["complexity"]
 
-    def test_apply_no_gate_without_request_text(self) -> None:
-        """Apply without --request-text should skip gating (backward compat)."""
-        with patch("specify_cli.cli.commands.agent.change.find_repo_root") as mock_root, \
-             patch("specify_cli.cli.commands.agent.change.detect_feature_slug") as mock_slug:
-            mock_root.return_value = Path("/tmp/fake-repo")
-            mock_slug.return_value = "029-test"
-
-            result = runner.invoke(
-                agent_change_app,
-                ["apply", "test-id", "--json"],
-            )
-            assert result.exit_code == 0
-            data = json.loads(result.output)
-            assert data["requestId"] == "test-id"
+    def test_apply_requires_request_text(self) -> None:
+        """Apply without --request-text should fail (required for complexity gating)."""
+        result = runner.invoke(
+            agent_change_app,
+            ["apply", "test-id", "--json"],
+        )
+        assert result.exit_code != 0
 
     def test_apply_simple_passes_without_continue(self) -> None:
         """Apply with simple complexity should pass without --continue."""
-        with patch("specify_cli.cli.commands.agent.change.find_repo_root") as mock_root, \
-             patch("specify_cli.cli.commands.agent.change.detect_feature_slug") as mock_slug:
+        with (
+            patch(
+                "specify_cli.cli.commands.agent.change.locate_project_root"
+            ) as mock_root,
+            patch(
+                "specify_cli.cli.commands.agent.change.detect_feature_slug"
+            ) as mock_slug,
+        ):
             mock_root.return_value = Path("/tmp/fake-repo")
             mock_slug.return_value = "029-test"
 
             result = runner.invoke(
                 agent_change_app,
                 [
-                    "apply", "test-id",
-                    "--request-text", "fix typo in README",
+                    "apply",
+                    "test-id",
+                    "--request-text",
+                    "fix typo in README",
                     "--json",
                 ],
             )
