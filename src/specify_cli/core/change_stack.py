@@ -9,14 +9,13 @@ for the /spec-kitty.change command.
 from __future__ import annotations
 
 import re
+import textwrap
 import uuid
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
 from enum import Enum
 from pathlib import Path
 from typing import Optional
-
-import textwrap
-from datetime import datetime, timezone
 
 from specify_cli.core.change_classifier import (
     ComplexityScore,
@@ -29,10 +28,9 @@ from specify_cli.core.dependency_graph import (
     detect_cycles,
     validate_dependencies,
 )
-from specify_cli.core.git_ops import get_current_branch
 from specify_cli.core.feature_detection import _get_main_repo_root
+from specify_cli.core.git_ops import get_current_branch
 from specify_cli.tasks_support import LANES
-
 
 # ============================================================================
 # Types
@@ -41,12 +39,14 @@ from specify_cli.tasks_support import LANES
 
 class StashScope(str, Enum):
     """Scope type for branch stash routing."""
+
     MAIN = "main"
     FEATURE = "feature"
 
 
 class ValidationState(str, Enum):
     """Validation state for change requests."""
+
     VALID = "valid"
     AMBIGUOUS = "ambiguous"
     BLOCKED = "blocked"
@@ -105,6 +105,7 @@ class BranchStash:
         stash_path: Absolute path to the stash directory
         tasks_doc_path: Absolute path to tasks.md (if applicable)
     """
+
     stash_key: str
     scope: StashScope
     stash_path: Path
@@ -120,6 +121,7 @@ class AmbiguityResult:
         matched_patterns: List of ambiguous pattern descriptions that triggered
         clarification_prompt: Suggested prompt to resolve ambiguity
     """
+
     is_ambiguous: bool
     matched_patterns: list[str] = field(default_factory=list)
     clarification_prompt: Optional[str] = None
@@ -134,6 +136,7 @@ class ClosedReferenceCheck:
         closed_wp_ids: List of referenced closed/done WP IDs
         linkable: True if the references can be used as link-only context
     """
+
     has_closed_references: bool
     closed_wp_ids: list[str] = field(default_factory=list)
     linkable: bool = True
@@ -153,6 +156,7 @@ class ChangeRequest:
         closed_references: Closed WP reference check result
         complexity_score: Deterministic complexity scoring result (FR-009)
     """
+
     request_id: str
     raw_text: str
     submitted_branch: str
@@ -172,6 +176,7 @@ class DependencyEdge:
         target: The WP being depended on
         edge_type: Description of edge kind ('change_to_normal', 'change_to_change')
     """
+
     source: str
     target: str
     edge_type: str
@@ -186,6 +191,7 @@ class DependencyPolicyResult:
         rejected_edges: Edges rejected with reasons
         errors: Critical errors that block the operation
     """
+
     valid_edges: list[DependencyEdge] = field(default_factory=list)
     rejected_edges: list[tuple[DependencyEdge, str]] = field(default_factory=list)
     errors: list[str] = field(default_factory=list)
@@ -206,6 +212,7 @@ class StackSelectionResult:
         blockers: List of blocking dependency descriptions
         pending_change_wps: Change WPs that exist but aren't ready
     """
+
     selected_source: str
     next_wp_id: Optional[str] = None
     normal_progression_blocked: bool = False
@@ -293,12 +300,12 @@ def _extract_feature_slug(branch: str) -> Optional[str]:
         Feature slug or None if branch doesn't match feature pattern
     """
     # Try worktree WP branch first (more specific pattern)
-    wp_match = re.match(r'^((\d{3})-.+)-WP\d{2}$', branch)
+    wp_match = re.match(r"^((\d{3})-.+)-WP\d{2}$", branch)
     if wp_match:
         return wp_match.group(1)
 
     # Try direct feature branch
-    feature_match = re.match(r'^(\d{3}-.+)$', branch)
+    feature_match = re.match(r"^(\d{3}-.+)$", branch)
     if feature_match:
         return feature_match.group(1)
 
@@ -353,13 +360,15 @@ def check_ambiguity(request_text: str) -> AmbiguityResult:
         ]
         for m in matched:
             prompt_parts.append(f"  - '{m}'")
-        prompt_parts.extend([
-            "",
-            "Please clarify by specifying:",
-            "  - File path(s) affected",
-            "  - Function or class name(s)",
-            "  - Work package ID(s) (e.g., WP01)",
-        ])
+        prompt_parts.extend(
+            [
+                "",
+                "Please clarify by specifying:",
+                "  - File path(s) affected",
+                "  - Function or class name(s)",
+                "  - Work package ID(s) (e.g., WP01)",
+            ]
+        )
 
         return AmbiguityResult(
             is_ambiguous=True,
@@ -394,7 +403,7 @@ def check_closed_references(
         ClosedReferenceCheck with identified closed WP references
     """
     # Find WP references in request text
-    wp_pattern = re.compile(r'\bWP(\d{2})\b')
+    wp_pattern = re.compile(r"\bWP(\d{2})\b")
     wp_matches = wp_pattern.findall(request_text)
 
     if not wp_matches:
@@ -510,11 +519,13 @@ def extract_dependency_candidates(
         is_change_wp = _is_change_wp(tasks_dir, wp_id)
         edge_type = "change_to_change" if is_change_wp else "change_to_normal"
 
-        candidates.append(DependencyEdge(
-            source=change_wp_id,
-            target=wp_id,
-            edge_type=edge_type,
-        ))
+        candidates.append(
+            DependencyEdge(
+                source=change_wp_id,
+                target=wp_id,
+                edge_type=edge_type,
+            )
+        )
 
     return candidates
 
@@ -529,7 +540,7 @@ def _is_change_wp(tasks_dir: Path, wp_id: str) -> bool:
         return False
 
     content = wp_files[0].read_text(encoding="utf-8")
-    match = re.search(r'^change_stack:\s*(true|True)\s*$', content, re.MULTILINE)
+    match = re.search(r"^change_stack:\s*(true|True)\s*$", content, re.MULTILINE)
     return match is not None
 
 
@@ -564,8 +575,11 @@ def validate_dependency_policy(
 
         if target_lane in CLOSED_LANES:
             result.rejected_edges.append(
-                (edge, f"Target {edge.target} is closed/done (lane: {target_lane}). "
-                 f"Use closed_reference_links instead of dependencies.")
+                (
+                    edge,
+                    f"Target {edge.target} is closed/done (lane: {target_lane}). "
+                    f"Use closed_reference_links instead of dependencies.",
+                )
             )
             continue
 
@@ -687,13 +701,17 @@ def resolve_next_change_wp(
         content = wp_file.read_text(encoding="utf-8")
 
         # Extract WP ID
-        wp_id_match = re.search(r'^work_package_id:\s*["\']?(WP\d{2})["\']?\s*$', content, re.MULTILINE)
+        wp_id_match = re.search(
+            r'^work_package_id:\s*["\']?(WP\d{2})["\']?\s*$', content, re.MULTILINE
+        )
         if not wp_id_match:
             continue
         wp_id = wp_id_match.group(1)
 
         # Check if it's a change-stack WP
-        is_change = re.search(r'^change_stack:\s*(true|True)\s*$', content, re.MULTILINE)
+        is_change = re.search(
+            r"^change_stack:\s*(true|True)\s*$", content, re.MULTILINE
+        )
 
         # Get lane
         lane_match = re.search(r'^lane:\s*["\']?(\w+)["\']?\s*$', content, re.MULTILINE)
@@ -701,7 +719,7 @@ def resolve_next_change_wp(
 
         if is_change:
             # Get stack_rank (default 0)
-            rank_match = re.search(r'^stack_rank:\s*(\d+)\s*$', content, re.MULTILINE)
+            rank_match = re.search(r"^stack_rank:\s*(\d+)\s*$", content, re.MULTILINE)
             rank = int(rank_match.group(1)) if rank_match else 0
             change_wps.append((wp_id, lane, rank))
         elif lane == "planned":
@@ -716,8 +734,7 @@ def resolve_next_change_wp(
 
     # Find change WPs in "planned" lane (candidates for doing)
     planned_change_wps = [
-        (wp_id, rank) for wp_id, lane, rank in change_wps
-        if lane == "planned"
+        (wp_id, rank) for wp_id, lane, rank in change_wps if lane == "planned"
     ]
 
     # Check which planned change WPs have all dependencies satisfied
@@ -740,8 +757,7 @@ def resolve_next_change_wp(
 
     # If any change WPs are still in progress (doing/for_review), report that
     active_change_wps = [
-        wp_id for wp_id, lane, _ in change_wps
-        if lane in ("doing", "for_review")
+        wp_id for wp_id, lane, _ in change_wps if lane in ("doing", "for_review")
     ]
 
     # Ready change WPs available -> select highest priority (lowest rank)
@@ -754,17 +770,12 @@ def resolve_next_change_wp(
         )
 
     # Pending change WPs exist but none ready -> block normal progression
-    pending_ids = (
-        [wp_id for wp_id, _ in planned_change_wps]
-        + active_change_wps
-    )
+    pending_ids = [wp_id for wp_id, _ in planned_change_wps] + active_change_wps
 
     if pending_ids:
         blockers: list[str] = []
         for wp_id, unsatisfied in blocked_change_wps:
-            blockers.append(
-                f"{wp_id} blocked by: {', '.join(sorted(unsatisfied))}"
-            )
+            blockers.append(f"{wp_id} blocked by: {', '.join(sorted(unsatisfied))}")
         for wp_id in active_change_wps:
             active_lane = next(
                 (lane for wid, lane, _ in change_wps if wid == wp_id), "doing"
@@ -866,6 +877,7 @@ class ChangePlan:
         guardrails: User-specified constraints to include in generated WPs
         requires_merge_coordination: Whether merge coordination jobs are needed
     """
+
     request_id: str
     mode: PackagingMode
     affected_open_wp_ids: list[str] = field(default_factory=list)
@@ -892,6 +904,7 @@ class ChangeWorkPackage:
         closed_reference_links: Link-only references to closed WPs
         body: Full markdown body including frontmatter
     """
+
     work_package_id: str
     title: str
     filename: str
@@ -971,12 +984,12 @@ def _slugify(text: str, max_length: int = 40) -> str:
     Returns:
         Lowercased, hyphenated slug
     """
-    slug = re.sub(r'[^a-zA-Z0-9\s-]', '', text.lower())
-    slug = re.sub(r'[\s_]+', '-', slug.strip())
-    slug = re.sub(r'-+', '-', slug)
-    slug = slug.strip('-')
+    slug = re.sub(r"[^a-zA-Z0-9\s-]", "", text.lower())
+    slug = re.sub(r"[\s_]+", "-", slug.strip())
+    slug = re.sub(r"-+", "-", slug)
+    slug = slug.strip("-")
     if len(slug) > max_length:
-        slug = slug[:max_length].rsplit('-', 1)[0]
+        slug = slug[:max_length].rsplit("-", 1)[0]
     return slug or "change"
 
 
@@ -993,14 +1006,14 @@ def _derive_title(request_text: str, max_length: int = 60) -> str:
     # Take first sentence or first N chars
     text = request_text.strip()
     # Cut at first period/newline if reasonable
-    for sep in ('.', '\n', ';'):
+    for sep in (".", "\n", ";"):
         idx = text.find(sep)
         if 10 < idx < max_length:
             text = text[:idx]
             break
 
     if len(text) > max_length:
-        text = text[:max_length].rsplit(' ', 1)[0] + "..."
+        text = text[:max_length].rsplit(" ", 1)[0] + "..."
 
     return text.strip()
 
@@ -1027,8 +1040,14 @@ def _render_wp_body(
     now = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
     # Build frontmatter
-    deps_yaml = "\n".join(f'  - "{d}"' for d in wp.dependencies) if wp.dependencies else ""
-    closed_refs_yaml = "\n".join(f'  - "{c}"' for c in wp.closed_reference_links) if wp.closed_reference_links else ""
+    deps_yaml = (
+        "\n".join(f'  - "{d}"' for d in wp.dependencies) if wp.dependencies else ""
+    )
+    closed_refs_yaml = (
+        "\n".join(f'  - "{c}"' for c in wp.closed_reference_links)
+        if wp.closed_reference_links
+        else ""
+    )
 
     frontmatter_lines = [
         "---",
@@ -1043,30 +1062,34 @@ def _render_wp_body(
     else:
         frontmatter_lines.append("dependencies: []")
 
-    frontmatter_lines.extend([
-        f"change_stack: true",
-        f'change_request_id: "{wp.change_request_id}"',
-        f'change_mode: "{wp.change_mode}"',
-        f"stack_rank: {wp.stack_rank}",
-        f'review_attention: "{wp.review_attention}"',
-    ])
+    frontmatter_lines.extend(
+        [
+            f"change_stack: true",
+            f'change_request_id: "{wp.change_request_id}"',
+            f'change_mode: "{wp.change_mode}"',
+            f"stack_rank: {wp.stack_rank}",
+            f'review_attention: "{wp.review_attention}"',
+        ]
+    )
 
     if closed_refs_yaml:
         frontmatter_lines.append("closed_reference_links:")
         frontmatter_lines.append(closed_refs_yaml)
 
-    frontmatter_lines.extend([
-        'assignee: ""',
-        'agent: ""',
-        'review_status: ""',
-        'reviewed_by: ""',
-        "history:",
-        f'  - timestamp: "{now}"',
-        '    lane: "planned"',
-        '    agent: "change-command"',
-        '    action: "Generated by /spec-kitty.change"',
-        "---",
-    ])
+    frontmatter_lines.extend(
+        [
+            'assignee: ""',
+            'agent: ""',
+            'review_status: ""',
+            'reviewed_by: ""',
+            "history:",
+            f'  - timestamp: "{now}"',
+            '    lane: "planned"',
+            '    agent: "change-command"',
+            '    action: "Generated by /spec-kitty.change"',
+            "---",
+        ]
+    )
 
     # Build body
     body_parts = [
@@ -1085,53 +1108,63 @@ def _render_wp_body(
 
     # Guardrails (T021)
     if guardrails:
-        body_parts.extend([
-            "## Acceptance Constraints",
-            "",
-        ])
+        body_parts.extend(
+            [
+                "## Acceptance Constraints",
+                "",
+            ]
+        )
         for i, g in enumerate(guardrails, 1):
             body_parts.append(f"{i}. {g}")
         body_parts.append("")
 
     # Closed references
     if closed_refs:
-        body_parts.extend([
-            "## Historical Context (Closed References)",
-            "",
-            "The following closed work packages are referenced for context only (not reopened):",
-            "",
-        ])
+        body_parts.extend(
+            [
+                "## Historical Context (Closed References)",
+                "",
+                "The following closed work packages are referenced for context only (not reopened):",
+                "",
+            ]
+        )
         for ref in closed_refs:
             body_parts.append(f"- {ref}")
         body_parts.append("")
 
     # Implementation guidance
-    body_parts.extend([
-        "## Implementation Guidance",
-        "",
-        "Implement the change described above. Follow the existing codebase patterns.",
-        "",
-    ])
+    body_parts.extend(
+        [
+            "## Implementation Guidance",
+            "",
+            "Implement the change described above. Follow the existing codebase patterns.",
+            "",
+        ]
+    )
 
     # Final testing task (T021 - always present)
-    body_parts.extend([
-        "## Final Testing Task",
-        "",
-        "**REQUIRED**: Before marking this WP as done:",
-        "",
-        "1. Run existing tests to verify no regressions: `pytest tests/`",
-        "2. Add tests covering the changes made in this WP",
-        "3. Verify all tests pass before moving to `for_review`",
-        "",
-    ])
+    body_parts.extend(
+        [
+            "## Final Testing Task",
+            "",
+            "**REQUIRED**: Before marking this WP as done:",
+            "",
+            "1. Run existing tests to verify no regressions: `pytest tests/`",
+            "2. Add tests covering the changes made in this WP",
+            "3. Verify all tests pass before moving to `for_review`",
+            "",
+        ]
+    )
 
     # Activity log
-    body_parts.extend([
-        "## Activity Log",
-        "",
-        f"- {now} - change-command - lane=planned - Generated by /spec-kitty.change",
-        "",
-    ])
+    body_parts.extend(
+        [
+            "## Activity Log",
+            "",
+            f"- {now} - change-command - lane=planned - Generated by /spec-kitty.change",
+            "",
+        ]
+    )
 
     frontmatter = "\n".join(frontmatter_lines)
     body = "\n".join(body_parts)
@@ -1173,15 +1206,15 @@ def _extract_guardrails(request_text: str) -> list[str]:
 
     # Check for "must" / "must not" / "do not" / "never" / "always" patterns
     constraint_patterns = [
-        re.compile(r'(?:must|should)\s+(?:not\s+)?(.{10,80}?)(?:\.|$)', re.IGNORECASE),
-        re.compile(r'(?:do not|don\'t|never)\s+(.{10,60}?)(?:\.|$)', re.IGNORECASE),
-        re.compile(r'(?:always)\s+(.{10,60}?)(?:\.|$)', re.IGNORECASE),
-        re.compile(r'(?:without)\s+(.{10,60}?)(?:\.|$)', re.IGNORECASE),
+        re.compile(r"(?:must|should)\s+(?:not\s+)?(.{10,80}?)(?:\.|$)", re.IGNORECASE),
+        re.compile(r"(?:do not|don\'t|never)\s+(.{10,60}?)(?:\.|$)", re.IGNORECASE),
+        re.compile(r"(?:always)\s+(.{10,60}?)(?:\.|$)", re.IGNORECASE),
+        re.compile(r"(?:without)\s+(.{10,60}?)(?:\.|$)", re.IGNORECASE),
     ]
 
     for pattern in constraint_patterns:
         for match in pattern.finditer(request_text):
-            guardrails.append(match.group(0).strip().rstrip('.'))
+            guardrails.append(match.group(0).strip().rstrip("."))
 
     if not guardrails:
         guardrails.append("Ensure existing tests continue to pass")
@@ -1217,9 +1250,7 @@ def synthesize_change_plan(
     guardrails = _extract_guardrails(change_req.raw_text)
 
     # Determine if merge coordination is needed (integration risk > 0)
-    requires_merge = (
-        score is not None and score.integration_risk_score > 0
-    )
+    requires_merge = score is not None and score.integration_risk_score > 0
 
     return ChangePlan(
         request_id=change_req.request_id,
@@ -1257,7 +1288,11 @@ def generate_change_work_packages(
 
     if plan.mode == PackagingMode.TARGETED_MULTI:
         return _generate_targeted_multi(
-            change_req, plan, tasks_dir, review_att, mode_label,
+            change_req,
+            plan,
+            tasks_dir,
+            review_att,
+            mode_label,
         )
 
     # single_wp and orchestration both produce one WP
@@ -1285,8 +1320,11 @@ def generate_change_work_packages(
         closed_reference_links=plan.closed_reference_wp_ids,
     )
     wp.body = _render_wp_body(
-        wp, change_req.raw_text, plan.guardrails,
-        plan.closed_reference_wp_ids, hint,
+        wp,
+        change_req.raw_text,
+        plan.guardrails,
+        plan.closed_reference_wp_ids,
+        hint,
     )
     return [wp]
 
@@ -1345,7 +1383,9 @@ def _generate_targeted_multi(
             closed_reference_links=plan.closed_reference_wp_ids if i == 0 else [],
         )
         wp.body = _render_wp_body(
-            wp, change_req.raw_text, plan.guardrails,
+            wp,
+            change_req.raw_text,
+            plan.guardrails,
             plan.closed_reference_wp_ids if i == 0 else [],
             hint,
         )
@@ -1412,10 +1452,567 @@ def write_change_work_packages(
 
 
 # ============================================================================
+# Reconciliation and Consistency (T030, T031)
+# ============================================================================
+
+
+@dataclass
+class ConsistencyReport:
+    """Machine-readable reconciliation status (FR-007, SC-001).
+
+    Attributes:
+        updated_tasks_doc: Whether tasks.md was updated
+        dependency_validation_passed: Whether all dependencies are valid
+        broken_links_fixed: Number of broken links repaired
+        issues: List of issue descriptions found during reconciliation
+        wp_sections_added: Number of new WP sections added to tasks.md
+        wp_sections_updated: Number of existing WP sections updated
+    """
+
+    updated_tasks_doc: bool = False
+    dependency_validation_passed: bool = True
+    broken_links_fixed: int = 0
+    issues: list[str] = field(default_factory=list)
+    wp_sections_added: int = 0
+    wp_sections_updated: int = 0
+
+    def to_dict(self) -> dict[str, object]:
+        """Serialize to JSON-friendly dictionary."""
+        return {
+            "updatedTasksDoc": self.updated_tasks_doc,
+            "dependencyValidationPassed": self.dependency_validation_passed,
+            "brokenLinksFixed": self.broken_links_fixed,
+            "issues": self.issues,
+            "wpSectionsAdded": self.wp_sections_added,
+            "wpSectionsUpdated": self.wp_sections_updated,
+        }
+
+
+@dataclass
+class MergeCoordinationJob:
+    """A merge coordination job triggered by cross-stream risk (FR-013).
+
+    Attributes:
+        job_id: Unique identifier for this job
+        reason: Why this job was triggered
+        source_wp: The change WP that triggered coordination
+        target_wps: WPs that need coordination
+        risk_indicator: The risk factor that triggered this job
+    """
+
+    job_id: str
+    reason: str
+    source_wp: str
+    target_wps: list[str] = field(default_factory=list)
+    risk_indicator: str = ""
+
+    def to_dict(self) -> dict[str, object]:
+        """Serialize to JSON-friendly dictionary."""
+        return {
+            "jobId": self.job_id,
+            "reason": self.reason,
+            "sourceWP": self.source_wp,
+            "targetWPs": self.target_wps,
+            "riskIndicator": self.risk_indicator,
+        }
+
+
+def reconcile_tasks_doc(
+    tasks_dir: Path,
+    feature_dir: Path,
+    change_wps: list[ChangeWorkPackage],
+) -> ConsistencyReport:
+    """Reconcile tasks.md with generated change WPs (T030, FR-007).
+
+    Inserts or updates WP sections and prompt links in tasks.md.
+    Preserves existing checklist state for unrelated subtasks.
+    Ensures deterministic ordering by WP ID.
+
+    Args:
+        tasks_dir: Path to the tasks directory
+        feature_dir: Path to the feature directory (parent of tasks/)
+        change_wps: List of change WPs that were generated
+
+    Returns:
+        ConsistencyReport with reconciliation results
+    """
+    report = ConsistencyReport()
+
+    if not change_wps:
+        return report
+
+    tasks_doc_path = feature_dir / "tasks.md"
+
+    # Read existing content or start fresh
+    existing_content = ""
+    existing_sections: dict[str, str] = {}
+    if tasks_doc_path.exists():
+        existing_content = tasks_doc_path.read_text(encoding="utf-8")
+        existing_sections = _parse_wp_sections(existing_content)
+
+    # Build updated sections for change WPs
+    new_sections: list[str] = []
+    for wp in change_wps:
+        wp_id = wp.work_package_id
+        section = _build_tasks_doc_section(wp)
+
+        if wp_id in existing_sections:
+            # Update existing section
+            existing_sections[wp_id] = section
+            report.wp_sections_updated += 1
+        else:
+            # New section
+            new_sections.append(section)
+            report.wp_sections_added += 1
+
+    if not new_sections and report.wp_sections_updated == 0:
+        return report
+
+    # Rebuild the document preserving non-WP content
+    updated_content = _rebuild_tasks_doc(
+        existing_content,
+        existing_sections,
+        new_sections,
+        change_wps,
+    )
+
+    tasks_doc_path.parent.mkdir(parents=True, exist_ok=True)
+    tasks_doc_path.write_text(updated_content, encoding="utf-8")
+    report.updated_tasks_doc = True
+
+    return report
+
+
+def _parse_wp_sections(content: str) -> dict[str, str]:
+    """Parse tasks.md into a dict of WP ID -> section content.
+
+    Sections are identified by headers matching '## WP##' or '### WP##'.
+    """
+    sections: dict[str, str] = {}
+    current_wp: Optional[str] = None
+    current_lines: list[str] = []
+
+    for line in content.split("\n"):
+        wp_header = re.match(r"^#{2,3}\s+(WP\d{2})\b", line)
+        if wp_header:
+            # Save previous section
+            if current_wp is not None:
+                sections[current_wp] = "\n".join(current_lines)
+            current_wp = wp_header.group(1)
+            current_lines = [line]
+        elif current_wp is not None:
+            # Check if we hit another non-WP heading (section boundary)
+            if re.match(r"^#{1,2}\s+(?!WP\d{2})", line):
+                sections[current_wp] = "\n".join(current_lines)
+                current_wp = None
+                current_lines = []
+            else:
+                current_lines.append(line)
+
+    # Save last section
+    if current_wp is not None:
+        sections[current_wp] = "\n".join(current_lines)
+
+    return sections
+
+
+def _build_tasks_doc_section(wp: ChangeWorkPackage) -> str:
+    """Build a tasks.md section for a change WP."""
+    lines = [
+        f"### {wp.work_package_id}: {wp.title}",
+        "",
+        f"- **Lane**: {wp.lane}",
+        f"- **Change Stack**: Yes",
+        f"- **Mode**: {wp.change_mode}",
+    ]
+    if wp.dependencies:
+        deps_str = ", ".join(wp.dependencies)
+        lines.append(f"- **Dependencies**: {deps_str}")
+    if wp.closed_reference_links:
+        refs_str = ", ".join(wp.closed_reference_links)
+        lines.append(f"- **Closed References**: {refs_str} (link-only)")
+    lines.extend(
+        [
+            "",
+            f"**Prompt**: `tasks/{wp.filename}`",
+            "",
+        ]
+    )
+    return "\n".join(lines)
+
+
+def _rebuild_tasks_doc(
+    existing_content: str,
+    existing_sections: dict[str, str],
+    new_sections: list[str],
+    change_wps: list[ChangeWorkPackage],
+) -> str:
+    """Rebuild tasks.md with updated and new sections.
+
+    Preserves existing non-WP content and unrelated checklist state.
+    Orders WP sections deterministically by WP ID.
+    """
+
+    # Sort new sections by WP ID for deterministic ordering
+    def _wp_id_from_section(section: str) -> str:
+        match = re.search(r"### (WP\d{2}):", section)
+        return match.group(1) if match else "WP99"
+
+    new_sections_sorted = sorted(new_sections, key=_wp_id_from_section)
+
+    # If no existing content, build from scratch
+    if not existing_content.strip():
+        parts = ["# Tasks", "", "## Change Stack Work Packages", ""]
+        for section in new_sections_sorted:
+            parts.append(section)
+        return "\n".join(parts)
+
+    # Find the "Change Stack" section or append at end
+    change_header_pattern = re.compile(
+        r"^#{1,2}\s+Change\s+Stack", re.MULTILINE | re.IGNORECASE
+    )
+    match = change_header_pattern.search(existing_content)
+
+    if match:
+        # Insert new sections after the change stack header
+        insert_pos = existing_content.find("\n", match.end())
+        if insert_pos == -1:
+            insert_pos = len(existing_content)
+        else:
+            insert_pos += 1
+
+        # Collect all WP sections that should appear under change stack
+        all_change_wp_ids = sorted(
+            set(
+                list(existing_sections.keys())
+                + [wp.work_package_id for wp in change_wps]
+            )
+        )
+
+        # Build the change stack section content
+        change_parts: list[str] = []
+        for wp_id in all_change_wp_ids:
+            if wp_id in existing_sections:
+                change_parts.append(existing_sections[wp_id])
+            else:
+                # Find in new_sections_sorted
+                for ns in new_sections_sorted:
+                    if f"### {wp_id}:" in ns:
+                        change_parts.append(ns)
+                        break
+
+        # Replace change stack section content
+        # Find the end of the change stack section (next top-level heading)
+        rest_match = re.search(
+            r"^#{1,2}\s+(?!Change\s+Stack|WP\d{2})",
+            existing_content[insert_pos:],
+            re.MULTILINE,
+        )
+        if rest_match:
+            rest_start = insert_pos + rest_match.start()
+            before = existing_content[:insert_pos]
+            after = existing_content[rest_start:]
+        else:
+            before = existing_content[:insert_pos]
+            after = ""
+
+        change_content = "\n".join(change_parts)
+        return f"{before}\n{change_content}\n{after}".rstrip() + "\n"
+    else:
+        # Append a change stack section
+        parts = [
+            existing_content.rstrip(),
+            "",
+            "## Change Stack Work Packages",
+            "",
+        ]
+        for section in new_sections_sorted:
+            parts.append(section)
+        return "\n".join(parts) + "\n"
+
+
+def validate_all_dependencies(
+    tasks_dir: Path,
+) -> tuple[bool, list[str]]:
+    """Validate dependency integrity for all WPs in the tasks directory.
+
+    Checks for missing references, self-edges, and cycles across
+    the entire WP graph.
+
+    Args:
+        tasks_dir: Path to the tasks directory
+
+    Returns:
+        Tuple of (all_valid, list of error messages)
+    """
+    if not tasks_dir.exists():
+        return True, []
+
+    graph = build_dependency_graph(tasks_dir)
+    all_errors: list[str] = []
+
+    # Check each WP's dependencies
+    for wp_id, deps in graph.items():
+        is_valid, errors = validate_dependencies(wp_id, deps, graph)
+        if not is_valid:
+            all_errors.extend(errors)
+
+    # Check for cycles
+    cycles = detect_cycles(graph)
+    if cycles:
+        for cycle in cycles:
+            cycle_str = " → ".join(cycle)
+            error = f"Circular dependency detected: {cycle_str}"
+            if error not in all_errors:
+                all_errors.append(error)
+
+    return len(all_errors) == 0, all_errors
+
+
+def reconcile_change_stack(
+    tasks_dir: Path,
+    feature_dir: Path,
+    change_wps: list[ChangeWorkPackage],
+) -> ConsistencyReport:
+    """Full reconciliation: tasks.md + dependency validation (T030, T031).
+
+    Orchestrates the complete reconciliation workflow:
+    1. Reconcile tasks.md with generated WPs
+    2. Validate all dependency integrity
+    3. Check for broken links and fix them
+
+    Args:
+        tasks_dir: Path to the tasks directory
+        feature_dir: Path to the feature directory
+        change_wps: List of generated change WPs
+
+    Returns:
+        ConsistencyReport with complete reconciliation status
+    """
+    # Step 1: Reconcile tasks.md
+    report = reconcile_tasks_doc(tasks_dir, feature_dir, change_wps)
+
+    # Step 2: Validate dependencies
+    is_valid, dep_errors = validate_all_dependencies(tasks_dir)
+    report.dependency_validation_passed = is_valid
+    if dep_errors:
+        report.issues.extend(dep_errors)
+
+    # Step 3: Check for broken prompt links in tasks.md
+    broken_count = _fix_broken_prompt_links(tasks_dir, feature_dir)
+    report.broken_links_fixed = broken_count
+
+    return report
+
+
+def _fix_broken_prompt_links(tasks_dir: Path, feature_dir: Path) -> int:
+    """Check and fix broken prompt links in tasks.md.
+
+    Removes lines containing broken prompt links (references to WP files
+    that no longer exist in the tasks directory).
+
+    Returns the number of links fixed (removed).
+    """
+    tasks_doc = feature_dir / "tasks.md"
+    if not tasks_doc.exists():
+        return 0
+
+    content = tasks_doc.read_text(encoding="utf-8")
+    fixed_count = 0
+
+    # Find all prompt links: `tasks/WP##-*.md`
+    link_pattern = re.compile(r"`tasks/(WP\d{2}-[^`]+\.md)`")
+    lines = content.split("\n")
+    cleaned_lines: list[str] = []
+
+    for line in lines:
+        match = link_pattern.search(line)
+        if match:
+            filename = match.group(1)
+            if not (tasks_dir / filename).exists():
+                # Broken link - remove this line
+                fixed_count += 1
+                continue
+        cleaned_lines.append(line)
+
+    if fixed_count > 0:
+        tasks_doc.write_text("\n".join(cleaned_lines), encoding="utf-8")
+
+    return fixed_count
+
+
+# ============================================================================
+# Merge Coordination Heuristics (T032, T033)
+# ============================================================================
+
+
+def compute_merge_coordination_jobs(
+    change_wps: list[ChangeWorkPackage],
+    tasks_dir: Path,
+    plan: ChangePlan,
+) -> list[MergeCoordinationJob]:
+    """Deterministically compute merge coordination jobs (T032, FR-013).
+
+    Creates merge coordination jobs when deterministic risk heuristics trigger:
+    1. Cross-dependency risk: change WP depends on an in-progress normal WP
+    2. Parallel modification risk: multiple change WPs touch overlapping areas
+    3. Integration risk: change plan has integration_risk flagged
+
+    Jobs are only created when conditions are met - no speculative jobs.
+
+    Args:
+        change_wps: The generated change WPs
+        tasks_dir: Path to tasks directory
+        plan: The change plan with risk indicators
+
+    Returns:
+        List of MergeCoordinationJob records
+    """
+    jobs: list[MergeCoordinationJob] = []
+
+    if not change_wps:
+        return jobs
+
+    # Heuristic 1: Integration risk from classifier
+    if plan.requires_merge_coordination:
+        source_wp = change_wps[0].work_package_id
+        # Find in-progress WPs that might conflict
+        active_wps = _find_active_wps(tasks_dir)
+
+        if active_wps:
+            job = MergeCoordinationJob(
+                job_id=f"mcj-{source_wp}-integration",
+                reason="Integration risk detected: change request involves CI/CD, "
+                "deployment, or external API changes that may conflict with "
+                "in-progress work",
+                source_wp=source_wp,
+                target_wps=active_wps,
+                risk_indicator="integration_risk",
+            )
+            jobs.append(job)
+
+    # Heuristic 2: Cross-dependency risk
+    for wp in change_wps:
+        for dep in wp.dependencies:
+            dep_lane = _get_wp_lane(tasks_dir, dep)
+            if dep_lane in ("doing", "for_review"):
+                job = MergeCoordinationJob(
+                    job_id=f"mcj-{wp.work_package_id}-cross-{dep}",
+                    reason=f"Cross-dependency risk: {wp.work_package_id} depends on "
+                    f"{dep} which is currently in {dep_lane} lane. Coordination "
+                    f"needed to avoid merge conflicts.",
+                    source_wp=wp.work_package_id,
+                    target_wps=[dep],
+                    risk_indicator="cross_dependency",
+                )
+                jobs.append(job)
+
+    # Heuristic 3: Parallel modification risk (targeted_multi only)
+    if len(change_wps) > 1:
+        # Multiple change WPs from same request could conflict
+        wp_ids = [wp.work_package_id for wp in change_wps]
+        job = MergeCoordinationJob(
+            job_id=f"mcj-parallel-{change_wps[0].change_request_id[:8]}",
+            reason="Parallel modification risk: multiple change WPs generated "
+            "from the same request. Ensure sequential implementation "
+            "respects the dependency chain.",
+            source_wp=change_wps[0].work_package_id,
+            target_wps=wp_ids[1:],
+            risk_indicator="parallel_modification",
+        )
+        jobs.append(job)
+
+    return jobs
+
+
+def _find_active_wps(tasks_dir: Path) -> list[str]:
+    """Find WPs currently in doing or for_review lanes."""
+    active: list[str] = []
+    if not tasks_dir.exists():
+        return active
+
+    for wp_file in sorted(tasks_dir.glob("WP*.md")):
+        content = wp_file.read_text(encoding="utf-8")
+        wp_id_match = re.search(
+            r'^work_package_id:\s*["\']?(WP\d{2})["\']?\s*$',
+            content,
+            re.MULTILINE,
+        )
+        lane_match = re.search(
+            r'^lane:\s*["\']?(\w+)["\']?\s*$',
+            content,
+            re.MULTILINE,
+        )
+
+        if wp_id_match and lane_match:
+            wp_id = wp_id_match.group(1)
+            lane = lane_match.group(1)
+            if lane in ("doing", "for_review"):
+                active.append(wp_id)
+
+    return active
+
+
+def persist_merge_coordination_jobs(
+    jobs: list[MergeCoordinationJob],
+    feature_dir: Path,
+) -> Path | None:
+    """Persist merge coordination jobs to planning artifacts (T033).
+
+    Writes jobs to a JSON file in the feature directory for downstream
+    discovery and command output.
+
+    Args:
+        jobs: List of merge coordination jobs to persist
+        feature_dir: Path to the feature directory
+
+    Returns:
+        Path to the persisted file, or None if no jobs
+    """
+    if not jobs:
+        return None
+
+    import json as _json
+
+    output_path = feature_dir / "change-merge-jobs.json"
+    feature_dir.mkdir(parents=True, exist_ok=True)
+
+    # If file exists, merge with existing jobs (idempotent by job_id)
+    existing_jobs: dict[str, dict[str, object]] = {}
+    if output_path.exists():
+        try:
+            existing_data = _json.loads(output_path.read_text(encoding="utf-8"))
+            for j in existing_data.get("jobs", []):
+                existing_jobs[j["jobId"]] = j
+        except (ValueError, KeyError):
+            pass
+
+    # Add/update new jobs
+    for job in jobs:
+        existing_jobs[job.job_id] = job.to_dict()
+
+    # Write sorted by job_id for determinism
+    sorted_jobs = [existing_jobs[k] for k in sorted(existing_jobs)]
+    output_data = {
+        "version": 1,
+        "featureDir": str(feature_dir),
+        "jobCount": len(sorted_jobs),
+        "jobs": sorted_jobs,
+    }
+
+    output_path.write_text(
+        _json.dumps(output_data, indent=2, default=str) + "\n",
+        encoding="utf-8",
+    )
+    return output_path
+
+
+# ============================================================================
 # Errors
 # ============================================================================
 
 
 class ChangeStackError(Exception):
     """Error during change stack operations."""
+
     pass
