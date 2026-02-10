@@ -15,15 +15,15 @@ from typing_extensions import Annotated
 
 from specify_cli.cli.commands.implement import implement as top_level_implement
 from specify_cli.core.dependency_graph import build_dependency_graph, get_dependents
+from specify_cli.core.feature_detection import (
+    FeatureDetectionError,
+    detect_feature_slug,
+)
 from specify_cli.core.implement_validation import (
     validate_and_resolve_base,
     validate_base_workspace_exists,
 )
-from specify_cli.core.paths import locate_project_root, get_main_repo_root
-from specify_cli.core.feature_detection import (
-    detect_feature_slug,
-    FeatureDetectionError,
-)
+from specify_cli.core.paths import get_main_repo_root, locate_project_root
 from specify_cli.mission import get_deliverables_path, get_feature_mission_key
 from specify_cli.tasks_support import (
     append_activity_log,
@@ -56,10 +56,11 @@ def _write_prompt_to_file(
     prompt_file.write_text(content, encoding="utf-8")
     return prompt_file
 
+
 app = typer.Typer(
     name="workflow",
     help="Workflow commands that display prompts and instructions for agents",
-    no_args_is_help=True
+    no_args_is_help=True,
 )
 
 
@@ -78,7 +79,9 @@ def _resolve_primary_branch(repo_root: Path) -> str:
     raise typer.Exit(1)
 
 
-def _ensure_target_branch_checked_out(repo_root: Path, feature_slug: str) -> tuple[Path, str]:
+def _ensure_target_branch_checked_out(
+    repo_root: Path, feature_slug: str
+) -> tuple[Path, str]:
     """Ensure the planning repo is on the feature's target branch."""
     main_repo_root = get_main_repo_root(repo_root)
 
@@ -95,7 +98,9 @@ def _ensure_target_branch_checked_out(repo_root: Path, feature_slug: str) -> tup
 
     current_branch = current_branch_result.stdout.strip()
     if current_branch == "HEAD":
-        print("Error: Planning repo is in detached HEAD state. Checkout a branch before continuing.")
+        print(
+            "Error: Planning repo is in detached HEAD state. Checkout a branch before continuing."
+        )
         raise typer.Exit(1)
 
     # Prefer explicit target_branch in meta.json, otherwise use current branch
@@ -128,7 +133,9 @@ def _ensure_target_branch_checked_out(repo_root: Path, feature_slug: str) -> tup
                     check=False,
                 )
                 if create_result.returncode != 0:
-                    print(f"Error: Could not create target branch '{target_branch}': {create_result.stderr}")
+                    print(
+                        f"Error: Could not create target branch '{target_branch}': {create_result.stderr}"
+                    )
                     raise typer.Exit(1)
                 print(f"✓ Created target branch: {target_branch} from {primary_branch}")
 
@@ -140,7 +147,9 @@ def _ensure_target_branch_checked_out(repo_root: Path, feature_slug: str) -> tup
             check=False,
         )
         if checkout_result.returncode != 0:
-            print(f"Error: Could not checkout target branch '{target_branch}': {checkout_result.stderr}")
+            print(
+                f"Error: Could not checkout target branch '{target_branch}': {checkout_result.stderr}"
+            )
             raise typer.Exit(1)
         print(f"→ Using {target_branch} as planning branch")
 
@@ -168,10 +177,7 @@ def _find_feature_slug(explicit_feature: str | None = None) -> str:
 
     try:
         return detect_feature_slug(
-            repo_root,
-            explicit_feature=explicit_feature,
-            cwd=cwd,
-            mode="strict"
+            repo_root, explicit_feature=explicit_feature, cwd=cwd, mode="strict"
         )
     except FeatureDetectionError as e:
         print(f"Error: {e}")
@@ -249,24 +255,32 @@ def _ensure_sparse_checkout(worktree_path: Path) -> bool:
         # Configure sparse-checkout
         subprocess.run(
             ["git", "config", "core.sparseCheckout", "true"],
-            cwd=worktree_path, capture_output=True, check=False
+            cwd=worktree_path,
+            capture_output=True,
+            check=False,
         )
         subprocess.run(
             ["git", "config", "core.sparseCheckoutCone", "false"],
-            cwd=worktree_path, capture_output=True, check=False
+            cwd=worktree_path,
+            capture_output=True,
+            check=False,
         )
         sparse_checkout_file.parent.mkdir(parents=True, exist_ok=True)
         sparse_checkout_file.write_text(expected_content, encoding="utf-8")
         subprocess.run(
             ["git", "read-tree", "-mu", "HEAD"],
-            cwd=worktree_path, capture_output=True, check=False
+            cwd=worktree_path,
+            capture_output=True,
+            check=False,
         )
 
         # Remove orphaned kitty-specs if present (from before sparse-checkout was configured)
         orphan_kitty = worktree_path / "kitty-specs"
         if orphan_kitty.exists():
             shutil.rmtree(orphan_kitty)
-            print(f"✓ Removed orphaned kitty-specs/ from worktree (now uses planning repo)")
+            print(
+                f"✓ Removed orphaned kitty-specs/ from worktree (now uses planning repo)"
+            )
 
     return True
 
@@ -335,7 +349,11 @@ def _find_first_planned_wp(repo_root: Path, feature_slug: str) -> Optional[str]:
     # Try stack-first selection via resolve_next_change_wp
     try:
         from specify_cli.core.change_stack import resolve_next_change_wp
+
         selection = resolve_next_change_wp(tasks_dir, feature_slug)
+
+        # Store selection for all outcomes so output section can report source
+        _store_stack_selection(selection)
 
         if selection.selected_source == "change_stack" and selection.next_wp_id:
             # Ready change-stack WP found - use it
@@ -343,8 +361,6 @@ def _find_first_planned_wp(repo_root: Path, feature_slug: str) -> Optional[str]:
 
         if selection.selected_source == "blocked":
             # Change-stack has pending items but none are ready
-            # Store blocker info for output (accessed via _last_stack_selection)
-            _store_stack_selection(selection)
             return None
 
         # selected_source == "normal_backlog" - fall through to legacy selection
@@ -394,10 +410,29 @@ def _clear_stack_selection() -> None:
 
 @app.command(name="implement")
 def implement(
-    wp_id: Annotated[Optional[str], typer.Argument(help="Work package ID (e.g., WP01, wp01, WP01-slug) - auto-detects first planned if omitted")] = None,
-    feature: Annotated[Optional[str], typer.Option("--feature", help="Feature slug (auto-detected if omitted)")] = None,
-    agent: Annotated[Optional[str], typer.Option("--agent", help="Agent name (required for auto-move to doing lane)")] = None,
-    base: Annotated[Optional[str], typer.Option("--base", help="Base WP to branch from (e.g., WP01) - creates worktree if provided")] = None,
+    wp_id: Annotated[
+        Optional[str],
+        typer.Argument(
+            help="Work package ID (e.g., WP01, wp01, WP01-slug) - auto-detects first planned if omitted"
+        ),
+    ] = None,
+    feature: Annotated[
+        Optional[str],
+        typer.Option("--feature", help="Feature slug (auto-detected if omitted)"),
+    ] = None,
+    agent: Annotated[
+        Optional[str],
+        typer.Option(
+            "--agent", help="Agent name (required for auto-move to doing lane)"
+        ),
+    ] = None,
+    base: Annotated[
+        Optional[str],
+        typer.Option(
+            "--base",
+            help="Base WP to branch from (e.g., WP01) - creates worktree if provided",
+        ),
+    ] = None,
 ) -> None:
     """Display work package prompt with implementation instructions.
 
@@ -422,7 +457,9 @@ def implement(
             raise typer.Exit(1)
 
         feature_slug = _find_feature_slug(explicit_feature=feature)
-        main_repo_root, target_branch = _ensure_target_branch_checked_out(repo_root, feature_slug)
+        main_repo_root, target_branch = _ensure_target_branch_checked_out(
+            repo_root, feature_slug
+        )
 
         # Determine which WP to implement
         if wp_id:
@@ -437,25 +474,40 @@ def implement(
                 last_selection = _get_last_stack_selection()
                 if last_selection is not None:
                     from specify_cli.core.change_stack import StackSelectionResult
-                    if isinstance(last_selection, StackSelectionResult) and last_selection.selected_source == "blocked":
-                        print("Error: Change stack has pending work packages but none are ready.")
-                        print("Normal backlog progression is blocked until change stack items are resolved.")
+
+                    if (
+                        isinstance(last_selection, StackSelectionResult)
+                        and last_selection.selected_source == "blocked"
+                    ):
+                        print(
+                            "Error: Change stack has pending work packages but none are ready."
+                        )
+                        print(
+                            "Normal backlog progression is blocked until change stack items are resolved."
+                        )
                         print("")
                         if last_selection.blockers:
                             print("Blockers:")
                             for blocker in last_selection.blockers:
                                 print(f"  - {blocker}")
                         if last_selection.pending_change_wps:
-                            print(f"\nPending change WPs: {', '.join(last_selection.pending_change_wps)}")
-                        print("\nResolve blocking dependencies or specify a WP ID explicitly.")
+                            print(
+                                f"\nPending change WPs: {', '.join(last_selection.pending_change_wps)}"
+                            )
+                        print(
+                            "\nResolve blocking dependencies or specify a WP ID explicitly."
+                        )
                         raise typer.Exit(1)
-                print("Error: No planned work packages found. Specify a WP ID explicitly.")
+                print(
+                    "Error: No planned work packages found. Specify a WP ID explicitly."
+                )
                 raise typer.Exit(1)
 
         # T039: Print selection source for transparency
         last_selection = _get_last_stack_selection()
         if last_selection is not None:
             from specify_cli.core.change_stack import StackSelectionResult
+
             if isinstance(last_selection, StackSelectionResult):
                 if last_selection.selected_source == "change_stack":
                     print(f"ℹ️  Selected from change stack (stack-first priority)")
@@ -483,7 +535,7 @@ def implement(
                 wp_file=wp.path,
                 base=base,  # May be None
                 feature_slug=feature_slug,
-                repo_root=repo_root
+                repo_root=repo_root,
             )
         except typer.Exit:
             # Validation failed (e.g., missing --base for single dependency)
@@ -503,7 +555,7 @@ def implement(
                     wp_id=normalized_wp_id,
                     base=resolved_base,  # None for auto-merge or no deps
                     feature=feature_slug,
-                    json_output=False
+                    json_output=False,
                 )
             except typer.Exit:
                 # Worktree creation failed - propagate error
@@ -521,18 +573,28 @@ def implement(
             # Require --agent parameter to track who is working
             if not agent:
                 print("Error: --agent parameter required when starting implementation.")
-                print(f"  Usage: spec-kitty agent workflow implement {normalized_wp_id} --agent <your-name>")
-                print("  Example: spec-kitty agent workflow implement WP01 --agent claude")
+                print(
+                    f"  Usage: spec-kitty agent workflow implement {normalized_wp_id} --agent <your-name>"
+                )
+                print(
+                    "  Example: spec-kitty agent workflow implement WP01 --agent claude"
+                )
                 print()
-                print("If you're using a generated agent command file, --agent is already included.")
-                print("This tracks WHO is working on the WP (prevents abandoned tasks).")
+                print(
+                    "If you're using a generated agent command file, --agent is already included."
+                )
+                print(
+                    "This tracks WHO is working on the WP (prevents abandoned tasks)."
+                )
                 raise typer.Exit(1)
 
-            from datetime import datetime, timezone
             import os
+            from datetime import datetime, timezone
 
             # Capture current shell PID
-            shell_pid = str(os.getppid())  # Parent process ID (the shell running this command)
+            shell_pid = str(
+                os.getppid()
+            )  # Parent process ID (the shell running this command)
 
             # Update lane, agent, and shell_pid in frontmatter
             updated_front = set_scalar(wp.frontmatter, "lane", "doing")
@@ -555,15 +617,23 @@ def implement(
 
             actual_wp_path = wp.path.resolve()
             commit_result = subprocess.run(
-                ["git", "commit", str(actual_wp_path), "-m", f"chore: Start {normalized_wp_id} implementation [{agent}]"],
+                [
+                    "git",
+                    "commit",
+                    str(actual_wp_path),
+                    "-m",
+                    f"chore: Start {normalized_wp_id} implementation [{agent}]",
+                ],
                 cwd=main_repo_root,
                 capture_output=True,
                 text=True,
-                check=False
+                check=False,
             )
 
             if commit_result.returncode == 0:
-                print(f"✓ Claimed {normalized_wp_id} (agent: {agent}, PID: {shell_pid}, target: {target_branch})")
+                print(
+                    f"✓ Claimed {normalized_wp_id} (agent: {agent}, PID: {shell_pid}, target: {target_branch})"
+                )
             else:
                 # Commit failed - file might already be committed in this state
                 pass
@@ -571,7 +641,9 @@ def implement(
             # Reload to get updated content
             wp = locate_work_package(repo_root, feature_slug, normalized_wp_id)
         else:
-            print(f"⚠️  {normalized_wp_id} is already in lane: {current_lane}. Workflow implement will not move it to doing.")
+            print(
+                f"⚠️  {normalized_wp_id} is already in lane: {current_lane}. Workflow implement will not move it to doing."
+            )
 
         # Check review status
         review_status = extract_scalar(wp.frontmatter, "review_status")
@@ -603,7 +675,7 @@ def implement(
                 cwd=repo_root,
                 capture_output=True,
                 text=True,
-                check=False
+                check=False,
             )
 
             if result.returncode != 0:
@@ -615,15 +687,32 @@ def implement(
                     cwd=workspace_path,
                     capture_output=True,
                     text=True,
-                    check=False
+                    check=False,
                 )
                 if sparse_checkout_result.returncode == 0:
                     sparse_checkout_file = Path(sparse_checkout_result.stdout.strip())
-                    subprocess.run(["git", "config", "core.sparseCheckout", "true"], cwd=workspace_path, capture_output=True, check=False)
-                    subprocess.run(["git", "config", "core.sparseCheckoutCone", "false"], cwd=workspace_path, capture_output=True, check=False)
+                    subprocess.run(
+                        ["git", "config", "core.sparseCheckout", "true"],
+                        cwd=workspace_path,
+                        capture_output=True,
+                        check=False,
+                    )
+                    subprocess.run(
+                        ["git", "config", "core.sparseCheckoutCone", "false"],
+                        cwd=workspace_path,
+                        capture_output=True,
+                        check=False,
+                    )
                     sparse_checkout_file.parent.mkdir(parents=True, exist_ok=True)
-                    sparse_checkout_file.write_text("/*\n!/kitty-specs/\n!/kitty-specs/**\n", encoding="utf-8")
-                    subprocess.run(["git", "read-tree", "-mu", "HEAD"], cwd=workspace_path, capture_output=True, check=False)
+                    sparse_checkout_file.write_text(
+                        "/*\n!/kitty-specs/\n!/kitty-specs/**\n", encoding="utf-8"
+                    )
+                    subprocess.run(
+                        ["git", "read-tree", "-mu", "HEAD"],
+                        cwd=workspace_path,
+                        capture_output=True,
+                        check=False,
+                    )
 
                     # Add .gitignore to block WP status files but allow research artifacts
                     gitignore_path = workspace_path / ".gitignore"
@@ -633,9 +722,15 @@ def implement(
                         if "kitty-specs/**/tasks/*.md" not in content:
                             # Remove old blanket rule if present
                             if "kitty-specs/\n" in content:
-                                content = content.replace("# Prevent worktree-local kitty-specs/ (status managed in main repo)\nkitty-specs/\n", "")
+                                content = content.replace(
+                                    "# Prevent worktree-local kitty-specs/ (status managed in main repo)\nkitty-specs/\n",
+                                    "",
+                                )
                                 content = content.replace("kitty-specs/\n", "")
-                            gitignore_path.write_text(content.rstrip() + "\n" + gitignore_entry, encoding="utf-8")
+                            gitignore_path.write_text(
+                                content.rstrip() + "\n" + gitignore_entry,
+                                encoding="utf-8",
+                            )
                     else:
                         gitignore_path.write_text(gitignore_entry, encoding="utf-8")
 
@@ -659,22 +754,48 @@ def implement(
 
         # CRITICAL: WP isolation rules
         lines.append("╔" + "=" * 78 + "╗")
-        lines.append("║  🚨 CRITICAL: WORK PACKAGE ISOLATION RULES                              ║")
+        lines.append(
+            "║  🚨 CRITICAL: WORK PACKAGE ISOLATION RULES                              ║"
+        )
         lines.append("╠" + "=" * 78 + "╣")
         lines.append(f"║  YOU ARE ASSIGNED TO: {normalized_wp_id:<55} ║")
-        lines.append("║                                                                          ║")
-        lines.append("║  ✅ DO:                                                                  ║")
+        lines.append(
+            "║                                                                          ║"
+        )
+        lines.append(
+            "║  ✅ DO:                                                                  ║"
+        )
         lines.append(f"║     • Only modify status of {normalized_wp_id:<47} ║")
-        lines.append(f"║     • Only mark subtasks belonging to {normalized_wp_id:<36} ║")
-        lines.append("║     • Ignore git commits and status changes from other agents           ║")
-        lines.append("║                                                                          ║")
-        lines.append("║  ❌ DO NOT:                                                              ║")
-        lines.append(f"║     • Change status of any WP other than {normalized_wp_id:<34} ║")
-        lines.append("║     • React to or investigate other WPs' status changes                 ║")
-        lines.append(f"║     • Mark subtasks that don't belong to {normalized_wp_id:<33} ║")
-        lines.append("║                                                                          ║")
-        lines.append("║  WHY: Multiple agents work in parallel. Each owns exactly ONE WP.       ║")
-        lines.append("║       Git commits from other WPs are other agents - ignore them.        ║")
+        lines.append(
+            f"║     • Only mark subtasks belonging to {normalized_wp_id:<36} ║"
+        )
+        lines.append(
+            "║     • Ignore git commits and status changes from other agents           ║"
+        )
+        lines.append(
+            "║                                                                          ║"
+        )
+        lines.append(
+            "║  ❌ DO NOT:                                                              ║"
+        )
+        lines.append(
+            f"║     • Change status of any WP other than {normalized_wp_id:<34} ║"
+        )
+        lines.append(
+            "║     • React to or investigate other WPs' status changes                 ║"
+        )
+        lines.append(
+            f"║     • Mark subtasks that don't belong to {normalized_wp_id:<33} ║"
+        )
+        lines.append(
+            "║                                                                          ║"
+        )
+        lines.append(
+            "║  WHY: Multiple agents work in parallel. Each owns exactly ONE WP.       ║"
+        )
+        lines.append(
+            "║       Git commits from other WPs are other agents - ignore them.        ║"
+        )
         lines.append("╚" + "=" * 78 + "╝")
         lines.append("")
 
@@ -686,15 +807,23 @@ def implement(
         lines.append(f"  1. **Commit your implementation files:**")
         lines.append(f"     git status  # Check what you changed")
         lines.append(f"     git add <your-implementation-files>  # NOT WP status files")
-        lines.append(f"     git commit -m \"feat({normalized_wp_id}): <brief description>\"")
+        lines.append(
+            f'     git commit -m "feat({normalized_wp_id}): <brief description>"'
+        )
         lines.append(f"     git log -1 --oneline  # Verify commit succeeded")
         lines.append(f"  2. Mark all subtasks as done:")
-        lines.append(f"     spec-kitty agent tasks mark-status T001 T002 T003 --status done")
+        lines.append(
+            f"     spec-kitty agent tasks mark-status T001 T002 T003 --status done"
+        )
         lines.append(f"  3. Move WP to review:")
-        lines.append(f"     spec-kitty agent tasks move-task {normalized_wp_id} --to for_review --note \"Ready for review\"")
+        lines.append(
+            f'     spec-kitty agent tasks move-task {normalized_wp_id} --to for_review --note "Ready for review"'
+        )
         lines.append("")
         lines.append(f"✗ Blocked or cannot complete:")
-        lines.append(f"  spec-kitty agent tasks add-history {normalized_wp_id} --note \"Blocked: <reason>\"")
+        lines.append(
+            f'  spec-kitty agent tasks add-history {normalized_wp_id} --note "Blocked: <reason>"'
+        )
         lines.append("=" * 80)
         lines.append("")
         lines.append(f"📍 WORKING DIRECTORY:")
@@ -703,46 +832,78 @@ def implement(
         lines.append(f"   # When done, return to repo root: cd {repo_root}")
         lines.append("")
         lines.append("📋 STATUS TRACKING:")
-        lines.append(f"   kitty-specs/ is excluded via sparse-checkout (status tracked in {target_branch})")
-        lines.append(f"   Status changes auto-commit to {target_branch} branch (visible to all agents)")
+        lines.append(
+            f"   kitty-specs/ is excluded via sparse-checkout (status tracked in {target_branch})"
+        )
+        lines.append(
+            f"   Status changes auto-commit to {target_branch} branch (visible to all agents)"
+        )
         lines.append(f"   ⚠️  You will see commits from other agents - IGNORE THEM")
         lines.append("=" * 80)
         lines.append("")
 
         if has_feedback:
-            lines.append("⚠️  This work package has review feedback. Check the '## Review Feedback' section below.")
+            lines.append(
+                "⚠️  This work package has review feedback. Check the '## Review Feedback' section below."
+            )
             lines.append("")
 
         # Research mission: Show deliverables path prominently
         if mission_key == "research" and deliverables_path:
             lines.append("╔" + "=" * 78 + "╗")
-            lines.append("║  🔬 RESEARCH MISSION - TWO ARTIFACT TYPES                                 ║")
+            lines.append(
+                "║  🔬 RESEARCH MISSION - TWO ARTIFACT TYPES                                 ║"
+            )
             lines.append("╠" + "=" * 78 + "╣")
-            lines.append("║                                                                          ║")
-            lines.append("║  📁 RESEARCH DELIVERABLES (your output):                                 ║")
+            lines.append(
+                "║                                                                          ║"
+            )
+            lines.append(
+                "║  📁 RESEARCH DELIVERABLES (your output):                                 ║"
+            )
             deliv_line = f"║     {deliverables_path:<69} ║"
             lines.append(deliv_line)
-            lines.append("║     ↳ Create findings, reports, data here                                ║")
-            lines.append("║     ↳ Commit to worktree branch                                          ║")
+            lines.append(
+                "║     ↳ Create findings, reports, data here                                ║"
+            )
+            lines.append(
+                "║     ↳ Commit to worktree branch                                          ║"
+            )
             lines.append(f"║     ↳ Will merge to {target_branch:<62} ║")
-            lines.append("║                                                                          ║")
-            lines.append("║  📋 PLANNING ARTIFACTS (kitty-specs/):                                   ║")
-            lines.append("║     ↳ evidence-log.csv, source-register.csv                              ║")
-            lines.append("║     ↳ Edit in planning repo (rare during implementation)                 ║")
-            lines.append("║                                                                          ║")
-            lines.append("║  ⚠️  DO NOT put research deliverables in kitty-specs/!                   ║")
+            lines.append(
+                "║                                                                          ║"
+            )
+            lines.append(
+                "║  📋 PLANNING ARTIFACTS (kitty-specs/):                                   ║"
+            )
+            lines.append(
+                "║     ↳ evidence-log.csv, source-register.csv                              ║"
+            )
+            lines.append(
+                "║     ↳ Edit in planning repo (rare during implementation)                 ║"
+            )
+            lines.append(
+                "║                                                                          ║"
+            )
+            lines.append(
+                "║  ⚠️  DO NOT put research deliverables in kitty-specs/!                   ║"
+            )
             lines.append("╚" + "=" * 78 + "╝")
             lines.append("")
 
         # WP content marker and content
         lines.append("╔" + "=" * 78 + "╗")
-        lines.append("║  WORK PACKAGE PROMPT BEGINS                                            ║")
+        lines.append(
+            "║  WORK PACKAGE PROMPT BEGINS                                            ║"
+        )
         lines.append("╚" + "=" * 78 + "╝")
         lines.append("")
         lines.append(wp.path.read_text(encoding="utf-8"))
         lines.append("")
         lines.append("╔" + "=" * 78 + "╗")
-        lines.append("║  WORK PACKAGE PROMPT ENDS                                              ║")
+        lines.append(
+            "║  WORK PACKAGE PROMPT ENDS                                              ║"
+        )
         lines.append("╚" + "=" * 78 + "╝")
         lines.append("")
 
@@ -754,20 +915,36 @@ def implement(
         lines.append(f"✅ Implementation complete and tested:")
         lines.append(f"   1. **Commit your implementation files:**")
         lines.append(f"      git status  # Check what you changed")
-        lines.append(f"      git add <your-implementation-files>  # NOT WP status files")
-        lines.append(f"      git commit -m \"feat({normalized_wp_id}): <brief description>\"")
+        lines.append(
+            f"      git add <your-implementation-files>  # NOT WP status files"
+        )
+        lines.append(
+            f'      git commit -m "feat({normalized_wp_id}): <brief description>"'
+        )
         lines.append(f"      git log -1 --oneline  # Verify commit succeeded")
-        lines.append(f"      (Use fix: for bugs, chore: for maintenance, docs: for documentation)")
+        lines.append(
+            f"      (Use fix: for bugs, chore: for maintenance, docs: for documentation)"
+        )
         lines.append(f"   2. Mark all subtasks as done:")
-        lines.append(f"      spec-kitty agent tasks mark-status T001 T002 T003 --status done")
+        lines.append(
+            f"      spec-kitty agent tasks mark-status T001 T002 T003 --status done"
+        )
         lines.append(f"   3. Move WP to review (will check for uncommitted changes):")
-        lines.append(f"      spec-kitty agent tasks move-task {normalized_wp_id} --to for_review --note \"Ready for review: <summary>\"")
+        lines.append(
+            f'      spec-kitty agent tasks move-task {normalized_wp_id} --to for_review --note "Ready for review: <summary>"'
+        )
         lines.append("")
         lines.append(f"⚠️  Blocked or cannot complete:")
-        lines.append(f"   spec-kitty agent tasks add-history {normalized_wp_id} --note \"Blocked: <reason>\"")
+        lines.append(
+            f'   spec-kitty agent tasks add-history {normalized_wp_id} --note "Blocked: <reason>"'
+        )
         lines.append("")
-        lines.append("⚠️  NOTE: The move-task command will FAIL if you have uncommitted changes!")
-        lines.append("     Commit all implementation files BEFORE moving to for_review.")
+        lines.append(
+            "⚠️  NOTE: The move-task command will FAIL if you have uncommitted changes!"
+        )
+        lines.append(
+            "     Commit all implementation files BEFORE moving to for_review."
+        )
         lines.append("     Dependent work packages need your committed changes.")
         lines.append("=" * 80)
 
@@ -788,9 +965,13 @@ def implement(
         print(f"    cat {prompt_file}")
         print()
         print("After implementation, run:")
-        print(f"  1. git status && git add <your-files> && git commit -m \"feat({normalized_wp_id}): <description>\"")
+        print(
+            f'  1. git status && git add <your-files> && git commit -m "feat({normalized_wp_id}): <description>"'
+        )
         print(f"  2. spec-kitty agent tasks mark-status T001 T002 ... --status done")
-        print(f"  3. spec-kitty agent tasks move-task {normalized_wp_id} --to for_review --note \"Ready for review\"")
+        print(
+            f'  3. spec-kitty agent tasks move-task {normalized_wp_id} --to for_review --note "Ready for review"'
+        )
         print(f"     (Pre-flight check will verify no uncommitted changes)")
 
     except Exception as e:
@@ -828,7 +1009,10 @@ def _resolve_review_context(
     # Get actual branch name from worktree
     result = subprocess.run(
         ["git", "rev-parse", "--abbrev-ref", "HEAD"],
-        cwd=workspace_path, capture_output=True, text=True, check=False,
+        cwd=workspace_path,
+        capture_output=True,
+        text=True,
+        check=False,
     )
     if result.returncode == 0 and result.stdout.strip():
         ctx["branch_name"] = result.stdout.strip()
@@ -841,7 +1025,7 @@ def _resolve_review_context(
     candidates: list[str] = []
 
     # From WP dependencies (e.g., dependencies: ["WP01"])
-    dep_match = re.search(r'dependencies:\s*\[([^\]]*)\]', wp_frontmatter)
+    dep_match = re.search(r"dependencies:\s*\[([^\]]*)\]", wp_frontmatter)
     if dep_match:
         dep_content = dep_match.group(1).strip()
         if dep_content:
@@ -859,14 +1043,20 @@ def _resolve_review_context(
     for candidate in candidates:
         mb = subprocess.run(
             ["git", "merge-base", branch, candidate],
-            cwd=repo_root, capture_output=True, text=True, check=False,
+            cwd=repo_root,
+            capture_output=True,
+            text=True,
+            check=False,
         )
         if mb.returncode != 0:
             continue
 
         count_r = subprocess.run(
             ["git", "rev-list", "--count", f"{mb.stdout.strip()}..{branch}"],
-            cwd=repo_root, capture_output=True, text=True, check=False,
+            cwd=repo_root,
+            capture_output=True,
+            text=True,
+            check=False,
         )
         if count_r.returncode != 0:
             continue
@@ -938,9 +1128,22 @@ def _find_first_for_review_wp(repo_root: Path, feature_slug: str) -> Optional[st
 
 @app.command(name="review")
 def review(
-    wp_id: Annotated[Optional[str], typer.Argument(help="Work package ID (e.g., WP01) - auto-detects first for_review if omitted")] = None,
-    feature: Annotated[Optional[str], typer.Option("--feature", help="Feature slug (auto-detected if omitted)")] = None,
-    agent: Annotated[Optional[str], typer.Option("--agent", help="Agent name (required for auto-move to doing lane)")] = None,
+    wp_id: Annotated[
+        Optional[str],
+        typer.Argument(
+            help="Work package ID (e.g., WP01) - auto-detects first for_review if omitted"
+        ),
+    ] = None,
+    feature: Annotated[
+        Optional[str],
+        typer.Option("--feature", help="Feature slug (auto-detected if omitted)"),
+    ] = None,
+    agent: Annotated[
+        Optional[str],
+        typer.Option(
+            "--agent", help="Agent name (required for auto-move to doing lane)"
+        ),
+    ] = None,
 ) -> None:
     """Display work package prompt with review instructions.
 
@@ -962,7 +1165,9 @@ def review(
             raise typer.Exit(1)
 
         feature_slug = _find_feature_slug(explicit_feature=feature)
-        main_repo_root, target_branch = _ensure_target_branch_checked_out(repo_root, feature_slug)
+        main_repo_root, target_branch = _ensure_target_branch_checked_out(
+            repo_root, feature_slug
+        )
 
         # Determine which WP to review
         if wp_id:
@@ -971,7 +1176,9 @@ def review(
             # Auto-detect first for_review WP
             normalized_wp_id = _find_first_for_review_wp(repo_root, feature_slug)
             if not normalized_wp_id:
-                print("Error: No work packages ready for review. Specify a WP ID explicitly.")
+                print(
+                    "Error: No work packages ready for review. Specify a WP ID explicitly."
+                )
                 raise typer.Exit(1)
 
         # Load work package
@@ -983,18 +1190,26 @@ def review(
             # Require --agent parameter to track who is reviewing
             if not agent:
                 print("Error: --agent parameter required when starting review.")
-                print(f"  Usage: spec-kitty agent workflow review {normalized_wp_id} --agent <your-name>")
+                print(
+                    f"  Usage: spec-kitty agent workflow review {normalized_wp_id} --agent <your-name>"
+                )
                 print("  Example: spec-kitty agent workflow review WP01 --agent claude")
                 print()
-                print("If you're using a generated agent command file, --agent is already included.")
-                print("This tracks WHO is reviewing the WP (prevents abandoned reviews).")
+                print(
+                    "If you're using a generated agent command file, --agent is already included."
+                )
+                print(
+                    "This tracks WHO is reviewing the WP (prevents abandoned reviews)."
+                )
                 raise typer.Exit(1)
 
-            from datetime import datetime, timezone
             import os
+            from datetime import datetime, timezone
 
             # Capture current shell PID
-            shell_pid = str(os.getppid())  # Parent process ID (the shell running this command)
+            shell_pid = str(
+                os.getppid()
+            )  # Parent process ID (the shell running this command)
 
             # Update lane, agent, and shell_pid in frontmatter
             updated_front = set_scalar(wp.frontmatter, "lane", "doing")
@@ -1017,15 +1232,23 @@ def review(
 
             actual_wp_path = wp.path.resolve()
             commit_result = subprocess.run(
-                ["git", "commit", str(actual_wp_path), "-m", f"chore: Start {normalized_wp_id} review [{agent}]"],
+                [
+                    "git",
+                    "commit",
+                    str(actual_wp_path),
+                    "-m",
+                    f"chore: Start {normalized_wp_id} review [{agent}]",
+                ],
                 cwd=main_repo_root,
                 capture_output=True,
                 text=True,
-                check=False
+                check=False,
             )
 
             if commit_result.returncode == 0:
-                print(f"✓ Claimed {normalized_wp_id} for review (agent: {agent}, PID: {shell_pid}, target: {target_branch})")
+                print(
+                    f"✓ Claimed {normalized_wp_id} for review (agent: {agent}, PID: {shell_pid}, target: {target_branch})"
+                )
             else:
                 # Commit failed - file might already be committed in this state
                 pass
@@ -1033,7 +1256,9 @@ def review(
             # Reload to get updated content
             wp = locate_work_package(repo_root, feature_slug, normalized_wp_id)
         else:
-            print(f"⚠️  {normalized_wp_id} is already in lane: {current_lane}. Workflow review will not move it to doing.")
+            print(
+                f"⚠️  {normalized_wp_id} is already in lane: {current_lane}. Workflow review will not move it to doing."
+            )
 
         # Calculate workspace path
         workspace_name = f"{feature_slug}-{normalized_wp_id}"
@@ -1054,7 +1279,7 @@ def review(
                 cwd=repo_root,
                 capture_output=True,
                 text=True,
-                check=False
+                check=False,
             )
 
             if result.returncode != 0:
@@ -1066,15 +1291,32 @@ def review(
                     cwd=workspace_path,
                     capture_output=True,
                     text=True,
-                    check=False
+                    check=False,
                 )
                 if sparse_checkout_result.returncode == 0:
                     sparse_checkout_file = Path(sparse_checkout_result.stdout.strip())
-                    subprocess.run(["git", "config", "core.sparseCheckout", "true"], cwd=workspace_path, capture_output=True, check=False)
-                    subprocess.run(["git", "config", "core.sparseCheckoutCone", "false"], cwd=workspace_path, capture_output=True, check=False)
+                    subprocess.run(
+                        ["git", "config", "core.sparseCheckout", "true"],
+                        cwd=workspace_path,
+                        capture_output=True,
+                        check=False,
+                    )
+                    subprocess.run(
+                        ["git", "config", "core.sparseCheckoutCone", "false"],
+                        cwd=workspace_path,
+                        capture_output=True,
+                        check=False,
+                    )
                     sparse_checkout_file.parent.mkdir(parents=True, exist_ok=True)
-                    sparse_checkout_file.write_text("/*\n!/kitty-specs/\n!/kitty-specs/**\n", encoding="utf-8")
-                    subprocess.run(["git", "read-tree", "-mu", "HEAD"], cwd=workspace_path, capture_output=True, check=False)
+                    sparse_checkout_file.write_text(
+                        "/*\n!/kitty-specs/\n!/kitty-specs/**\n", encoding="utf-8"
+                    )
+                    subprocess.run(
+                        ["git", "read-tree", "-mu", "HEAD"],
+                        cwd=workspace_path,
+                        capture_output=True,
+                        check=False,
+                    )
 
                     # Add .gitignore to block WP status files but allow research artifacts
                     gitignore_path = workspace_path / ".gitignore"
@@ -1084,9 +1326,15 @@ def review(
                         if "kitty-specs/**/tasks/*.md" not in content:
                             # Remove old blanket rule if present
                             if "kitty-specs/\n" in content:
-                                content = content.replace("# Prevent worktree-local kitty-specs/ (status managed in main repo)\nkitty-specs/\n", "")
+                                content = content.replace(
+                                    "# Prevent worktree-local kitty-specs/ (status managed in main repo)\nkitty-specs/\n",
+                                    "",
+                                )
                                 content = content.replace("kitty-specs/\n", "")
-                            gitignore_path.write_text(content.rstrip() + "\n" + gitignore_entry, encoding="utf-8")
+                            gitignore_path.write_text(
+                                content.rstrip() + "\n" + gitignore_entry,
+                                encoding="utf-8",
+                            )
                     else:
                         gitignore_path.write_text(gitignore_entry, encoding="utf-8")
 
@@ -1111,7 +1359,9 @@ def review(
             incomplete: list[str] = []
             for dependent_id in dependents:
                 try:
-                    dependent_wp = locate_work_package(repo_root, feature_slug, dependent_id)
+                    dependent_wp = locate_work_package(
+                        repo_root, feature_slug, dependent_id
+                    )
                 except FileNotFoundError:
                     continue
                 lane = extract_scalar(dependent_wp.frontmatter, "lane")
@@ -1119,8 +1369,12 @@ def review(
                     incomplete.append(dependent_id)
             if incomplete:
                 dependents_list = ", ".join(sorted(incomplete))
-                dependents_warning.append(f"⚠️  Dependency Alert: {dependents_list} depend on {normalized_wp_id} (not yet done)")
-                dependents_warning.append("   If you request changes, notify those agents to rebase.")
+                dependents_warning.append(
+                    f"⚠️  Dependency Alert: {dependents_list} depend on {normalized_wp_id} (not yet done)"
+                )
+                dependents_warning.append(
+                    "   If you request changes, notify those agents to rebase."
+                )
 
         # Build full prompt content for file
         lines = []
@@ -1140,21 +1394,45 @@ def review(
 
         # CRITICAL: WP isolation rules
         lines.append("╔" + "=" * 78 + "╗")
-        lines.append("║  🚨 CRITICAL: WORK PACKAGE ISOLATION RULES                              ║")
+        lines.append(
+            "║  🚨 CRITICAL: WORK PACKAGE ISOLATION RULES                              ║"
+        )
         lines.append("╠" + "=" * 78 + "╣")
         lines.append(f"║  YOU ARE REVIEWING: {normalized_wp_id:<56} ║")
-        lines.append("║                                                                          ║")
-        lines.append("║  ✅ DO:                                                                  ║")
+        lines.append(
+            "║                                                                          ║"
+        )
+        lines.append(
+            "║  ✅ DO:                                                                  ║"
+        )
         lines.append(f"║     • Only modify status of {normalized_wp_id:<47} ║")
-        lines.append("║     • Ignore git commits and status changes from other agents           ║")
-        lines.append("║                                                                          ║")
-        lines.append("║  ❌ DO NOT:                                                              ║")
-        lines.append(f"║     • Change status of any WP other than {normalized_wp_id:<34} ║")
-        lines.append("║     • React to or investigate other WPs' status changes                 ║")
-        lines.append(f"║     • Review or approve any WP other than {normalized_wp_id:<32} ║")
-        lines.append("║                                                                          ║")
-        lines.append("║  WHY: Multiple agents work in parallel. Each owns exactly ONE WP.       ║")
-        lines.append("║       Git commits from other WPs are other agents - ignore them.        ║")
+        lines.append(
+            "║     • Ignore git commits and status changes from other agents           ║"
+        )
+        lines.append(
+            "║                                                                          ║"
+        )
+        lines.append(
+            "║  ❌ DO NOT:                                                              ║"
+        )
+        lines.append(
+            f"║     • Change status of any WP other than {normalized_wp_id:<34} ║"
+        )
+        lines.append(
+            "║     • React to or investigate other WPs' status changes                 ║"
+        )
+        lines.append(
+            f"║     • Review or approve any WP other than {normalized_wp_id:<32} ║"
+        )
+        lines.append(
+            "║                                                                          ║"
+        )
+        lines.append(
+            "║  WHY: Multiple agents work in parallel. Each owns exactly ONE WP.       ║"
+        )
+        lines.append(
+            "║       Git commits from other WPs are other agents - ignore them.        ║"
+        )
         lines.append("╚" + "=" * 78 + "╝")
         lines.append("")
 
@@ -1163,11 +1441,15 @@ def review(
             base = review_ctx["base_branch"]
             lines.append("─── GIT REVIEW CONTEXT " + "─" * 57)
             lines.append(f"Branch:      {review_ctx['branch_name']}")
-            lines.append(f"Base branch: {base} ({review_ctx['commit_count']} commits ahead)")
+            lines.append(
+                f"Base branch: {base} ({review_ctx['commit_count']} commits ahead)"
+            )
             lines.append("")
             lines.append("Review commands (run in the workspace):")
             lines.append(f"  cd {workspace_path}")
-            lines.append(f"  git log {base}..HEAD --oneline           # WP commits only")
+            lines.append(
+                f"  git log {base}..HEAD --oneline           # WP commits only"
+            )
             lines.append(f"  git diff {base}..HEAD --stat             # Changed files")
             lines.append(f"  git diff {base}..HEAD                    # Full diff")
             lines.append("─" * 80)
@@ -1178,11 +1460,15 @@ def review(
         lines.append("WHEN YOU'RE DONE:")
         lines.append("=" * 80)
         lines.append(f"✓ Review passed, no issues:")
-        lines.append(f"  spec-kitty agent tasks move-task {normalized_wp_id} --to done --note \"Review passed\"")
+        lines.append(
+            f'  spec-kitty agent tasks move-task {normalized_wp_id} --to done --note "Review passed"'
+        )
         lines.append("")
         lines.append(f"⚠️  Changes requested:")
         lines.append(f"  1. Add feedback to the WP file's '## Review Feedback' section")
-        lines.append(f"  2. spec-kitty agent tasks move-task {normalized_wp_id} --to planned --note \"Changes requested\"")
+        lines.append(
+            f'  2. spec-kitty agent tasks move-task {normalized_wp_id} --to planned --note "Changes requested"'
+        )
         lines.append("=" * 80)
         lines.append("")
         lines.append(f"📍 WORKING DIRECTORY:")
@@ -1192,8 +1478,12 @@ def review(
         lines.append(f"   # When done, return to repo root: cd {repo_root}")
         lines.append("")
         lines.append("📋 STATUS TRACKING:")
-        lines.append(f"   kitty-specs/ is excluded via sparse-checkout (status tracked in {target_branch})")
-        lines.append(f"   Status changes auto-commit to {target_branch} branch (visible to all agents)")
+        lines.append(
+            f"   kitty-specs/ is excluded via sparse-checkout (status tracked in {target_branch})"
+        )
+        lines.append(
+            f"   Status changes auto-commit to {target_branch} branch (visible to all agents)"
+        )
         lines.append(f"   ⚠️  You will see commits from other agents - IGNORE THEM")
         lines.append("=" * 80)
         lines.append("")
@@ -1203,13 +1493,17 @@ def review(
 
         # WP content marker and content
         lines.append("╔" + "=" * 78 + "╗")
-        lines.append("║  WORK PACKAGE PROMPT BEGINS                                            ║")
+        lines.append(
+            "║  WORK PACKAGE PROMPT BEGINS                                            ║"
+        )
         lines.append("╚" + "=" * 78 + "╝")
         lines.append("")
         lines.append(wp.path.read_text(encoding="utf-8"))
         lines.append("")
         lines.append("╔" + "=" * 78 + "╗")
-        lines.append("║  WORK PACKAGE PROMPT ENDS                                              ║")
+        lines.append(
+            "║  WORK PACKAGE PROMPT ENDS                                              ║"
+        )
         lines.append("╚" + "=" * 78 + "╝")
         lines.append("")
 
@@ -1219,10 +1513,15 @@ def review(
         lines.append("=" * 80)
         lines.append("")
         lines.append(f"✅ APPROVE (no issues found):")
-        lines.append(f"   spec-kitty agent tasks move-task {normalized_wp_id} --to done --note \"Review passed: <summary>\"")
+        lines.append(
+            f'   spec-kitty agent tasks move-task {normalized_wp_id} --to done --note "Review passed: <summary>"'
+        )
         lines.append("")
         # Create unique temp file path for review feedback (avoids conflicts between agents)
-        review_feedback_path = Path(tempfile.gettempdir()) / f"spec-kitty-review-feedback-{normalized_wp_id}.md"
+        review_feedback_path = (
+            Path(tempfile.gettempdir())
+            / f"spec-kitty-review-feedback-{normalized_wp_id}.md"
+        )
 
         lines.append(f"❌ REQUEST CHANGES (issues found):")
         lines.append(f"   1. Write feedback:")
@@ -1232,9 +1531,13 @@ def review(
         lines.append(f"EOF")
         lines.append("")
         lines.append(f"   2. Move to planned with feedback:")
-        lines.append(f"      spec-kitty agent tasks move-task {normalized_wp_id} --to planned --review-feedback-file {review_feedback_path}")
+        lines.append(
+            f"      spec-kitty agent tasks move-task {normalized_wp_id} --to planned --review-feedback-file {review_feedback_path}"
+        )
         lines.append("")
-        lines.append("⚠️  NOTE: You MUST run one of these commands to complete the review!")
+        lines.append(
+            "⚠️  NOTE: You MUST run one of these commands to complete the review!"
+        )
         lines.append("     The Python script handles all file updates automatically.")
         lines.append("=" * 80)
 
@@ -1243,7 +1546,10 @@ def review(
         prompt_file = _write_prompt_to_file("review", normalized_wp_id, full_content)
 
         # Create unique temp file path for review feedback (same as in prompt)
-        review_feedback_path = Path(tempfile.gettempdir()) / f"spec-kitty-review-feedback-{normalized_wp_id}.md"
+        review_feedback_path = (
+            Path(tempfile.gettempdir())
+            / f"spec-kitty-review-feedback-{normalized_wp_id}.md"
+        )
 
         # Output concise summary with directive to read the prompt
         print()
@@ -1254,15 +1560,21 @@ def review(
         print(f"📍 Workspace: cd {workspace_path}")
         if review_ctx["base_branch"] != "unknown":
             base = review_ctx["base_branch"]
-            print(f"🔀 Branch: {review_ctx['branch_name']} (based on {base}, {review_ctx['commit_count']} commits)")
+            print(
+                f"🔀 Branch: {review_ctx['branch_name']} (based on {base}, {review_ctx['commit_count']} commits)"
+            )
             print(f"   Review diff: git log {base}..HEAD --oneline")
         print()
         print("▶▶▶ NEXT STEP: Read the full prompt file now:")
         print(f"    cat {prompt_file}")
         print()
         print("After review, run:")
-        print(f"  ✅ spec-kitty agent tasks move-task {normalized_wp_id} --to done --note \"Review passed\"")
-        print(f"  ❌ spec-kitty agent tasks move-task {normalized_wp_id} --to planned --review-feedback-file {review_feedback_path}")
+        print(
+            f'  ✅ spec-kitty agent tasks move-task {normalized_wp_id} --to done --note "Review passed"'
+        )
+        print(
+            f"  ❌ spec-kitty agent tasks move-task {normalized_wp_id} --to planned --review-feedback-file {review_feedback_path}"
+        )
 
     except Exception as e:
         print(f"Error: {e}")
