@@ -12,11 +12,9 @@ from pathlib import Path
 from unittest.mock import patch
 
 import pytest
-from typer.testing import CliRunner
-
-from specify_cli.cli.commands.change import change
 from specify_cli.cli.commands.agent.change import app as agent_change_app
-
+from specify_cli.cli.commands.change import change
+from typer.testing import CliRunner
 
 runner = CliRunner()
 
@@ -51,6 +49,7 @@ class TestChangeCommandRegistration:
     def test_change_in_top_level_registration(self):
         """The change command should be in the top-level command registry."""
         import typer
+
         from specify_cli.cli.commands import register_commands
 
         app = typer.Typer()
@@ -58,7 +57,12 @@ class TestChangeCommandRegistration:
 
         command_names = []
         for c in app.registered_commands:
-            command_names.append(c.name or (c.callback.__name__ if c.callback else None))
+            command_names.append(
+                c.name or (c.callback.__name__ if c.callback else None)
+            )
+            command_names.append(
+                c.name or (c.callback.__name__ if c.callback else None)
+            )
         for g in app.registered_groups:
             command_names.append(g.name)
 
@@ -77,9 +81,16 @@ class TestAgentChangePreview:
 
     def test_preview_returns_json(self):
         """Preview should return structured JSON with required fields."""
-        with patch("specify_cli.cli.commands.agent.change.find_repo_root") as mock_root, \
-             patch("specify_cli.core.change_stack.get_current_branch", return_value="029-test-feature"), \
-             patch("specify_cli.core.change_stack._get_main_repo_root") as mock_main:
+        with (
+            patch(
+                "specify_cli.cli.commands.agent.change.locate_project_root"
+            ) as mock_root,
+            patch(
+                "specify_cli.core.change_stack.get_current_branch",
+                return_value="029-test-feature",
+            ),
+            patch("specify_cli.core.change_stack._get_main_repo_root") as mock_main,
+        ):
             mock_root.return_value = Path("/tmp/fake-repo")
             mock_main.return_value = Path("/tmp/fake-repo")
 
@@ -97,9 +108,16 @@ class TestAgentChangePreview:
 
     def test_preview_complexity_fields(self):
         """Preview complexity assessment should have all scoring fields."""
-        with patch("specify_cli.cli.commands.agent.change.find_repo_root") as mock_root, \
-             patch("specify_cli.core.change_stack.get_current_branch", return_value="029-test-feature"), \
-             patch("specify_cli.core.change_stack._get_main_repo_root") as mock_main:
+        with (
+            patch(
+                "specify_cli.cli.commands.agent.change.locate_project_root"
+            ) as mock_root,
+            patch(
+                "specify_cli.core.change_stack.get_current_branch",
+                return_value="029-test-feature",
+            ),
+            patch("specify_cli.core.change_stack._get_main_repo_root") as mock_main,
+        ):
             mock_root.return_value = Path("/tmp/fake-repo")
             mock_main.return_value = Path("/tmp/fake-repo")
 
@@ -124,8 +142,14 @@ class TestAgentChangeApply:
 
     def test_apply_returns_json(self):
         """Apply should return structured JSON with required fields."""
-        with patch("specify_cli.cli.commands.agent.change.find_repo_root") as mock_root, \
-             patch("specify_cli.cli.commands.agent.change.detect_feature_slug") as mock_slug:
+        with (
+            patch(
+                "specify_cli.cli.commands.agent.change.locate_project_root"
+            ) as mock_root,
+            patch(
+                "specify_cli.cli.commands.agent.change.detect_feature_slug"
+            ) as mock_slug,
+        ):
             mock_root.return_value = Path("/tmp/fake-repo")
             mock_slug.return_value = "029-test-feature"
 
@@ -147,8 +171,14 @@ class TestAgentChangeNext:
 
     def test_next_returns_json(self):
         """Next should return structured JSON with required fields."""
-        with patch("specify_cli.cli.commands.agent.change.find_repo_root") as mock_root, \
-             patch("specify_cli.cli.commands.agent.change.detect_feature_slug") as mock_slug:
+        with (
+            patch(
+                "specify_cli.cli.commands.agent.change.locate_project_root"
+            ) as mock_root,
+            patch(
+                "specify_cli.cli.commands.agent.change.detect_feature_slug"
+            ) as mock_slug,
+        ):
             mock_root.return_value = Path("/tmp/fake-repo")
             mock_slug.return_value = "029-test-feature"
 
@@ -169,8 +199,14 @@ class TestAgentChangeReconcile:
 
     def test_reconcile_returns_json(self):
         """Reconcile should return structured JSON with required fields."""
-        with patch("specify_cli.cli.commands.agent.change.find_repo_root") as mock_root, \
-             patch("specify_cli.cli.commands.agent.change.detect_feature_slug") as mock_slug:
+        with (
+            patch(
+                "specify_cli.cli.commands.agent.change.locate_project_root"
+            ) as mock_root,
+            patch(
+                "specify_cli.cli.commands.agent.change.detect_feature_slug"
+            ) as mock_slug,
+        ):
             mock_root.return_value = Path("/tmp/fake-repo")
             mock_slug.return_value = "029-test-feature"
 
@@ -274,7 +310,10 @@ class TestChangeCommandTemplates:
 
     def test_no_legacy_alias_in_templates(self):
         """Templates should not reference legacy aliases."""
-        for subdir in ["templates/command-templates", "missions/software-dev/command-templates"]:
+        for subdir in [
+            "templates/command-templates",
+            "missions/software-dev/command-templates",
+        ]:
             template_path = (
                 Path(__file__).parent.parent.parent
                 / "src"
