@@ -12,14 +12,14 @@ from typing_extensions import Annotated
 from specify_cli.core.change_stack import (
     ChangeStackError,
     ValidationState,
-    validate_change_request,
     resolve_stash,
+    validate_change_request,
 )
 from specify_cli.core.feature_detection import (
     FeatureDetectionError,
     detect_feature_slug,
 )
-from specify_cli.tasks_support import TaskCliError, find_repo_root
+from specify_cli.core.paths import locate_project_root
 
 app = typer.Typer(
     name="change",
@@ -46,19 +46,21 @@ def _output_error(error: str, message: str, as_json: bool) -> None:
 
 
 def _resolve_repo() -> Path:
-    """Resolve repo root.
+    """Resolve project root (requires initialized Spec Kitty project).
 
     Returns:
-        Repository root path
+        Project root path (with .kittify directory)
 
     Raises:
-        typer.Exit: If resolution fails
+        typer.Exit: If not inside an initialized Spec Kitty project
     """
-    try:
-        return find_repo_root()
-    except TaskCliError as exc:
-        print(f"Error: {exc}")
+    repo_root = locate_project_root()
+    if repo_root is None:
+        print(
+            "Error: Not inside an initialized Spec Kitty project (.kittify not found)"
+        )
         raise typer.Exit(1)
+    return repo_root
 
 
 def _resolve_feature(feature: Optional[str]) -> tuple[Path, str]:
@@ -73,7 +75,9 @@ def _resolve_feature(feature: Optional[str]) -> tuple[Path, str]:
     repo_root = _resolve_repo()
 
     try:
-        feature_slug = (feature or detect_feature_slug(repo_root, cwd=Path.cwd())).strip()
+        feature_slug = (
+            feature or detect_feature_slug(repo_root, cwd=Path.cwd())
+        ).strip()
     except (FeatureDetectionError, Exception) as exc:
         print(f"Error: Could not detect feature - {exc}")
         raise typer.Exit(1)
@@ -83,9 +87,15 @@ def _resolve_feature(feature: Optional[str]) -> tuple[Path, str]:
 
 @app.command(name="preview")
 def preview(
-    request_text: Annotated[str, typer.Argument(help="Natural-language change request")],
-    feature: Annotated[Optional[str], typer.Option("--feature", help="Feature slug (auto-detected)")] = None,
-    submitted_by: Annotated[str, typer.Option("--submitted-by", help="Who submitted the request")] = "agent",
+    request_text: Annotated[
+        str, typer.Argument(help="Natural-language change request")
+    ],
+    feature: Annotated[
+        Optional[str], typer.Option("--feature", help="Feature slug (auto-detected)")
+    ] = None,
+    submitted_by: Annotated[
+        str, typer.Option("--submitted-by", help="Who submitted the request")
+    ] = "agent",
     json_output: Annotated[bool, typer.Option("--json", help="Output as JSON")] = False,
 ) -> None:
     """Validate and classify a change request before creating work packages.
@@ -150,9 +160,15 @@ def preview(
 @app.command(name="apply")
 def apply(
     request_id: Annotated[str, typer.Argument(help="Request ID from preview step")],
-    feature: Annotated[Optional[str], typer.Option("--feature", help="Feature slug (auto-detected)")] = None,
-    continue_after_warning: Annotated[bool, typer.Option("--continue", help="Continue despite complexity warning")] = False,
-    confirm_unambiguous: Annotated[bool, typer.Option("--confirm", help="Confirm request is unambiguous")] = False,
+    feature: Annotated[
+        Optional[str], typer.Option("--feature", help="Feature slug (auto-detected)")
+    ] = None,
+    continue_after_warning: Annotated[
+        bool, typer.Option("--continue", help="Continue despite complexity warning")
+    ] = False,
+    confirm_unambiguous: Annotated[
+        bool, typer.Option("--confirm", help="Confirm request is unambiguous")
+    ] = False,
     json_output: Annotated[bool, typer.Option("--json", help="Output as JSON")] = False,
 ) -> None:
     """Apply a validated change request and create change work packages.
@@ -188,7 +204,9 @@ def apply(
 
 @app.command(name="next")
 def next_doable(
-    feature: Annotated[Optional[str], typer.Option("--feature", help="Feature slug (auto-detected)")] = None,
+    feature: Annotated[
+        Optional[str], typer.Option("--feature", help="Feature slug (auto-detected)")
+    ] = None,
     json_output: Annotated[bool, typer.Option("--json", help="Output as JSON")] = False,
 ) -> None:
     """Resolve the next doable work package with change-stack priority.
@@ -219,8 +237,15 @@ def next_doable(
 
 @app.command(name="reconcile")
 def reconcile(
-    feature: Annotated[Optional[str], typer.Option("--feature", help="Feature slug (auto-detected)")] = None,
-    recompute_merge_jobs: Annotated[bool, typer.Option("--recompute-merge-jobs", help="Recompute merge coordination jobs")] = True,
+    feature: Annotated[
+        Optional[str], typer.Option("--feature", help="Feature slug (auto-detected)")
+    ] = None,
+    recompute_merge_jobs: Annotated[
+        bool,
+        typer.Option(
+            "--recompute-merge-jobs", help="Recompute merge coordination jobs"
+        ),
+    ] = True,
     json_output: Annotated[bool, typer.Option("--json", help="Output as JSON")] = False,
 ) -> None:
     """Recompute links, dependencies, and merge coordination jobs.

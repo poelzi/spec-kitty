@@ -11,10 +11,8 @@ from pathlib import Path
 from unittest.mock import patch
 
 import pytest
-from typer.testing import CliRunner
-
 from specify_cli.cli.commands.agent.change import app as agent_change_app
-
+from typer.testing import CliRunner
 
 runner = CliRunner()
 
@@ -24,9 +22,16 @@ class TestPreviewWithRouting:
 
     def test_preview_on_feature_branch(self) -> None:
         """Preview on feature branch should route to feature stash."""
-        with patch("specify_cli.cli.commands.agent.change.find_repo_root") as mock_root, \
-             patch("specify_cli.core.change_stack.get_current_branch", return_value="029-test"), \
-             patch("specify_cli.core.change_stack._get_main_repo_root") as mock_main:
+        with (
+            patch(
+                "specify_cli.cli.commands.agent.change.locate_project_root"
+            ) as mock_root,
+            patch(
+                "specify_cli.core.change_stack.get_current_branch",
+                return_value="029-test",
+            ),
+            patch("specify_cli.core.change_stack._get_main_repo_root") as mock_main,
+        ):
             mock_root.return_value = Path("/tmp/fake-repo")
             mock_main.return_value = Path("/tmp/fake-repo")
 
@@ -43,9 +48,15 @@ class TestPreviewWithRouting:
 
     def test_preview_on_main_branch(self) -> None:
         """Preview on main should route to main stash."""
-        with patch("specify_cli.cli.commands.agent.change.find_repo_root") as mock_root, \
-             patch("specify_cli.core.change_stack.get_current_branch", return_value="main"), \
-             patch("specify_cli.core.change_stack._get_main_repo_root") as mock_main:
+        with (
+            patch(
+                "specify_cli.cli.commands.agent.change.locate_project_root"
+            ) as mock_root,
+            patch(
+                "specify_cli.core.change_stack.get_current_branch", return_value="main"
+            ),
+            patch("specify_cli.core.change_stack._get_main_repo_root") as mock_main,
+        ):
             mock_root.return_value = Path("/tmp/fake-repo")
             mock_main.return_value = Path("/tmp/fake-repo")
 
@@ -60,9 +71,16 @@ class TestPreviewWithRouting:
 
     def test_preview_ambiguous_request(self) -> None:
         """Ambiguous request should be flagged in preview."""
-        with patch("specify_cli.cli.commands.agent.change.find_repo_root") as mock_root, \
-             patch("specify_cli.core.change_stack.get_current_branch", return_value="029-test"), \
-             patch("specify_cli.core.change_stack._get_main_repo_root") as mock_main:
+        with (
+            patch(
+                "specify_cli.cli.commands.agent.change.locate_project_root"
+            ) as mock_root,
+            patch(
+                "specify_cli.core.change_stack.get_current_branch",
+                return_value="029-test",
+            ),
+            patch("specify_cli.core.change_stack._get_main_repo_root") as mock_main,
+        ):
             mock_root.return_value = Path("/tmp/fake-repo")
             mock_main.return_value = Path("/tmp/fake-repo")
 
@@ -78,9 +96,16 @@ class TestPreviewWithRouting:
 
     def test_preview_with_closed_wp_reference(self) -> None:
         """Preview should include closed reference info."""
-        with patch("specify_cli.cli.commands.agent.change.find_repo_root") as mock_root, \
-             patch("specify_cli.core.change_stack.get_current_branch", return_value="001-demo"), \
-             patch("specify_cli.core.change_stack._get_main_repo_root") as mock_main:
+        with (
+            patch(
+                "specify_cli.cli.commands.agent.change.locate_project_root"
+            ) as mock_root,
+            patch(
+                "specify_cli.core.change_stack.get_current_branch",
+                return_value="001-demo",
+            ),
+            patch("specify_cli.core.change_stack._get_main_repo_root") as mock_main,
+        ):
             repo_root = Path("/tmp/fake-repo")
             mock_root.return_value = repo_root
             mock_main.return_value = repo_root
@@ -105,14 +130,21 @@ class TestPreviewWithRouting:
             finally:
                 # Cleanup temp files
                 import shutil
+
                 if tasks_dir.exists():
                     shutil.rmtree(tasks_dir.parent)
 
     def test_preview_unresolvable_branch_errors(self) -> None:
         """Preview should error when branch can't be resolved."""
-        with patch("specify_cli.cli.commands.agent.change.find_repo_root") as mock_root, \
-             patch("specify_cli.core.change_stack.get_current_branch", return_value=None), \
-             patch("specify_cli.core.change_stack._get_main_repo_root") as mock_main:
+        with (
+            patch(
+                "specify_cli.cli.commands.agent.change.locate_project_root"
+            ) as mock_root,
+            patch(
+                "specify_cli.core.change_stack.get_current_branch", return_value=None
+            ),
+            patch("specify_cli.core.change_stack._get_main_repo_root") as mock_main,
+        ):
             mock_root.return_value = Path("/tmp/fake-repo")
             mock_main.return_value = Path("/tmp/fake-repo")
 
@@ -128,9 +160,16 @@ class TestPreviewValidation:
 
     def test_request_with_file_path_is_valid(self) -> None:
         """Requests mentioning file paths should be valid."""
-        with patch("specify_cli.cli.commands.agent.change.find_repo_root") as mock_root, \
-             patch("specify_cli.core.change_stack.get_current_branch", return_value="029-test"), \
-             patch("specify_cli.core.change_stack._get_main_repo_root") as mock_main:
+        with (
+            patch(
+                "specify_cli.cli.commands.agent.change.locate_project_root"
+            ) as mock_root,
+            patch(
+                "specify_cli.core.change_stack.get_current_branch",
+                return_value="029-test",
+            ),
+            patch("specify_cli.core.change_stack._get_main_repo_root") as mock_main,
+        ):
             mock_root.return_value = Path("/tmp/fake-repo")
             mock_main.return_value = Path("/tmp/fake-repo")
 
@@ -142,11 +181,32 @@ class TestPreviewValidation:
             data = json.loads(result.output)
             assert data["validationState"] == "valid"
 
+    def test_preview_fails_in_non_initialized_repo(self) -> None:
+        """Preview should fail with exit 1 in a git repo without .kittify."""
+        with patch(
+            "specify_cli.cli.commands.agent.change.locate_project_root"
+        ) as mock_root:
+            mock_root.return_value = None  # No .kittify found
+
+            result = runner.invoke(
+                agent_change_app,
+                ["preview", "add caching", "--json"],
+            )
+            assert result.exit_code == 1
+            assert ".kittify not found" in result.output
+
     def test_request_with_wp_id_is_valid(self) -> None:
         """Requests mentioning WP IDs should be valid even with vague language."""
-        with patch("specify_cli.cli.commands.agent.change.find_repo_root") as mock_root, \
-             patch("specify_cli.core.change_stack.get_current_branch", return_value="029-test"), \
-             patch("specify_cli.core.change_stack._get_main_repo_root") as mock_main:
+        with (
+            patch(
+                "specify_cli.cli.commands.agent.change.locate_project_root"
+            ) as mock_root,
+            patch(
+                "specify_cli.core.change_stack.get_current_branch",
+                return_value="029-test",
+            ),
+            patch("specify_cli.core.change_stack._get_main_repo_root") as mock_main,
+        ):
             mock_root.return_value = Path("/tmp/fake-repo")
             mock_main.return_value = Path("/tmp/fake-repo")
 
