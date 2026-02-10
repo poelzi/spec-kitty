@@ -140,8 +140,12 @@ class TestAgentChangePreview:
 class TestAgentChangeApply:
     """Test the agent change apply subcommand."""
 
-    def test_apply_returns_json(self):
+    def test_apply_returns_json(self, tmp_path):
         """Apply should return structured JSON with required fields."""
+        # Create tasks dir for stash routing
+        tasks_dir = tmp_path / "kitty-specs" / "029-test-feature" / "tasks"
+        tasks_dir.mkdir(parents=True)
+
         with (
             patch(
                 "specify_cli.cli.commands.agent.change.locate_project_root"
@@ -149,8 +153,16 @@ class TestAgentChangeApply:
             patch(
                 "specify_cli.cli.commands.agent.change.detect_feature_slug"
             ) as mock_slug,
+            patch(
+                "specify_cli.core.change_stack.get_current_branch",
+                return_value="029-test-feature",
+            ),
+            patch(
+                "specify_cli.core.change_stack._get_main_repo_root",
+                return_value=tmp_path,
+            ),
         ):
-            mock_root.return_value = Path("/tmp/fake-repo")
+            mock_root.return_value = tmp_path
             mock_slug.return_value = "029-test-feature"
 
             result = runner.invoke(

@@ -225,6 +225,9 @@ def apply(
             )
             # Override the request_id with the one from preview
             change_req.request_id = request_id
+            # Propagate the score with correct continued_after_warning state
+            # (validate_change_request recomputes without it)
+            change_req.complexity_score = score
         except ChangeStackError as exc:
             _output_error("validation_failed", str(exc), json_output)
             raise typer.Exit(1)
