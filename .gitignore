@@ -76,3 +76,6 @@ sdd-*/
 kitty-specs/**/tasks/*.md
 # Generated PDF brochures (output of generate_pdf.py)
 spec-kitty-capabilities.pdf
+
+# Nix results
+result
