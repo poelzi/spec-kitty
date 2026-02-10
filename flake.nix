@@ -428,6 +428,7 @@
             packages = [
               pythonEnv
               pkgs.git
+              pkgs.ruff
             ];
 
             shellHook = ''
