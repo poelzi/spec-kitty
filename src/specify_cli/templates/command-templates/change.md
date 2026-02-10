@@ -58,7 +58,8 @@ spec-kitty agent change reconcile --json
 ## Branch Stash Routing
 
 - **Feature branch**: Routes to feature stash (`kitty-specs/<feature>/tasks/`)
-- **Main branch**: Routes to main stash (`kitty-specs/change-stack/main/`)
+- **Main/primary branch**: Routes to embedded main stash (`kitty-specs/change-stack/main/`)
+- Detection covers `main`, `master`, and other primary branch patterns
 
 ## Complexity Assessment
 
@@ -70,6 +71,7 @@ Uses deterministic scoring across 5 dimensions:
 - Integration risk (0-1)
 
 Total >= threshold triggers `/spec-kitty.specify` recommendation.
+Use `--continue` to override the gate when you understand the complexity implications.
 
 ## Key Behaviors
 

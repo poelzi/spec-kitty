@@ -41,6 +41,8 @@ spec-kitty agent change reconcile --json
 - **Stack-first**: Change WPs execute before normal backlog
 - **Testing closure**: Every change WP includes a final test task
 - **Link-only**: Closed WPs are referenced, never reopened
+- **Main stash**: Primary branch changes route to `kitty-specs/change-stack/main/`
+- **Complexity gate**: High-complexity requests block unless `--continue` is passed
 
 ## User Input
 
