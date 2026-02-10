@@ -13,12 +13,19 @@ from specify_cli.core.change_classifier import ComplexityClassification
 from specify_cli.core.change_stack import (
     ChangeStackError,
     ValidationState,
+    _build_implementation_hint,
+    _next_wp_id,
+    _render_wp_body,
+    build_closed_reference_links,
+    extract_dependency_candidates,
     generate_change_work_packages,
+    resolve_next_change_wp,
     resolve_stash,
     synthesize_change_plan,
     validate_change_request,
+    validate_dependency_graph_integrity,
+    validate_dependency_policy,
     write_change_work_packages,
-    resolve_next_change_wp,
 )
 from specify_cli.core.feature_detection import (
     FeatureDetectionError,
@@ -234,14 +241,83 @@ def apply(
             raise typer.Exit(1)
 
     if change_req is not None:
-        # Synthesize plan and generate WPs
+        # Synthesize plan
         plan = synthesize_change_plan(change_req)
-        wps = generate_change_work_packages(
-            change_req, plan, change_req.stash.stash_path
+        tasks_dir = change_req.stash.stash_path
+
+        # --- Dependency policy enforcement (T024-T026) ---
+        import re as _re
+
+        wp_refs = _re.findall(r"\bWP(\d{2})\b", request_text)
+        affected_wp_ids = sorted(set(f"WP{num}" for num in wp_refs))
+
+        # Build closed reference links (T027)
+        closed_refs = build_closed_reference_links(
+            request_text,
+            tasks_dir,
+            feature_slug,
+            repo_root,
+        )
+        plan.closed_reference_wp_ids = closed_refs
+
+        # Allocate a provisional change WP ID for dependency validation
+        provisional_wp_id = _next_wp_id(tasks_dir)
+
+        # Extract candidate dependency edges (T024)
+        candidates = extract_dependency_candidates(
+            affected_wp_ids,
+            provisional_wp_id,
+            tasks_dir,
         )
 
+        # Validate dependency policy (T025)
+        policy_result = validate_dependency_policy(candidates, tasks_dir)
+        validated_dep_ids = [e.target for e in policy_result.valid_edges]
+
+        # Validate full graph integrity (T026) - abort atomically on failure
+        dep_issues: list[str] = []
+        if validated_dep_ids:
+            graph_valid, graph_errors = validate_dependency_graph_integrity(
+                provisional_wp_id,
+                validated_dep_ids,
+                tasks_dir,
+            )
+            if not graph_valid:
+                dep_issues.extend(graph_errors)
+                _output_error(
+                    "dependency_validation_failed",
+                    "; ".join(graph_errors),
+                    json_output,
+                )
+                raise typer.Exit(1)
+
+        # Propagate validated dependencies into the plan
+        plan.affected_open_wp_ids = validated_dep_ids
+
+        # Generate WPs with dependency information
+        wps = generate_change_work_packages(change_req, plan, tasks_dir)
+
+        # Inject validated dependencies into generated WPs and re-render bodies
+        for wp in wps:
+            if not wp.dependencies and validated_dep_ids:
+                wp.dependencies = validated_dep_ids
+                hint = _build_implementation_hint(wp.work_package_id, wp.dependencies)
+                wp.body = _render_wp_body(
+                    wp,
+                    change_req.raw_text,
+                    plan.guardrails,
+                    wp.closed_reference_links,
+                    hint,
+                )
+
         # Write WP files to disk
-        written_paths = write_change_work_packages(wps, change_req.stash.stash_path)
+        written_paths = write_change_work_packages(wps, tasks_dir)
+
+        # Build rejected edge diagnostics
+        rejected_diagnostics = [
+            {"edge": f"{e.source} -> {e.target}", "reason": reason}
+            for e, reason in policy_result.rejected_edges
+        ]
 
         result: dict[str, object] = {
             "requestId": request_id,
@@ -251,12 +327,14 @@ def apply(
             "mergeCoordinationJobs": [],  # Full implementation in WP06
             "consistency": {
                 "updatedTasksDoc": False,
-                "dependencyValidationPassed": True,
+                "dependencyValidationPassed": len(dep_issues) == 0,
                 "brokenLinksFixed": 0,
-                "issues": [],
+                "issues": dep_issues,
             },
             "mode": plan.mode.value,
         }
+        if rejected_diagnostics:
+            result["rejectedEdges"] = rejected_diagnostics
         if score is not None:
             result["complexity"] = score.to_dict()
     else:

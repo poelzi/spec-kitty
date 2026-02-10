@@ -448,3 +448,190 @@ class TestApplyContinueGate:
             assert result.exit_code == 0
             data = json.loads(result.output)
             assert data["requestId"] == "test-id"
+
+
+class TestApplyDependencyEnforcement:
+    """Test dependency policy enforcement wired into the apply path (WP05)."""
+
+    def _make_wp_file(
+        self, tasks_dir: Path, wp_id: str, lane: str, change_stack: bool = False
+    ) -> None:
+        """Helper to create a WP file with frontmatter."""
+        content = f'---\nwork_package_id: "{wp_id}"\ntitle: "{wp_id} test"\nlane: "{lane}"\nchange_stack: {"true" if change_stack else "false"}\ndependencies: []\n---\n# {wp_id}\n'
+        tasks_dir.mkdir(parents=True, exist_ok=True)
+        (tasks_dir / f"{wp_id}-test.md").write_text(content, encoding="utf-8")
+
+    def test_apply_extracts_and_attaches_dependencies(self, tmp_path: Path) -> None:
+        """Apply should extract WP refs, validate deps, and attach to generated WP."""
+        tasks_dir = tmp_path / "kitty-specs" / "029-test" / "tasks"
+        self._make_wp_file(tasks_dir, "WP01", "doing")
+
+        with (
+            patch(
+                "specify_cli.cli.commands.agent.change.locate_project_root"
+            ) as mock_root,
+            patch(
+                "specify_cli.cli.commands.agent.change.detect_feature_slug"
+            ) as mock_slug,
+            patch(
+                "specify_cli.core.change_stack.get_current_branch",
+                return_value="029-test",
+            ),
+            patch(
+                "specify_cli.core.change_stack._get_main_repo_root",
+                return_value=tmp_path,
+            ),
+        ):
+            mock_root.return_value = tmp_path
+            mock_slug.return_value = "029-test"
+
+            result = runner.invoke(
+                agent_change_app,
+                [
+                    "apply",
+                    "test-id",
+                    "--request-text",
+                    "apply same pattern as WP01 to auth.py",
+                    "--json",
+                ],
+            )
+            assert result.exit_code == 0
+            data = json.loads(result.output)
+            # Generated WP should have WP01 as a dependency
+            created = data["createdWorkPackages"]
+            assert len(created) >= 1
+            assert "WP01" in created[0]["dependencies"]
+            assert data["consistency"]["dependencyValidationPassed"] is True
+
+    def test_apply_rejects_closed_wp_as_dependency(self, tmp_path: Path) -> None:
+        """Apply should reject edges to closed/done WPs (use closed_reference_links instead)."""
+        tasks_dir = tmp_path / "kitty-specs" / "029-test" / "tasks"
+        self._make_wp_file(tasks_dir, "WP01", "done")
+
+        with (
+            patch(
+                "specify_cli.cli.commands.agent.change.locate_project_root"
+            ) as mock_root,
+            patch(
+                "specify_cli.cli.commands.agent.change.detect_feature_slug"
+            ) as mock_slug,
+            patch(
+                "specify_cli.core.change_stack.get_current_branch",
+                return_value="029-test",
+            ),
+            patch(
+                "specify_cli.core.change_stack._get_main_repo_root",
+                return_value=tmp_path,
+            ),
+        ):
+            mock_root.return_value = tmp_path
+            mock_slug.return_value = "029-test"
+
+            result = runner.invoke(
+                agent_change_app,
+                [
+                    "apply",
+                    "test-id",
+                    "--request-text",
+                    "apply same pattern as WP01 to auth.py",
+                    "--json",
+                ],
+            )
+            assert result.exit_code == 0
+            data = json.loads(result.output)
+            # WP01 is done, so it should NOT be a dependency
+            created = data["createdWorkPackages"]
+            assert len(created) >= 1
+            assert "WP01" not in created[0]["dependencies"]
+            # It should be in closedReferenceLinks instead
+            assert "WP01" in data["closedReferenceLinks"]
+
+    def test_apply_aborts_on_cyclic_dependency(self, tmp_path: Path) -> None:
+        """Apply should abort atomically when cycle detected in dependency graph."""
+        tasks_dir = tmp_path / "kitty-specs" / "029-test" / "tasks"
+        # WP01 depends on WP02, WP02 is open. The new change WP will depend on WP02,
+        # and WP01 also depends on the new WP ID -> cycle.
+        # To create a cycle, we make WP01 depend on the next allocatable ID (WP03)
+        # and then the request references WP01 (which would create WP03 -> WP01 -> WP03)
+        content_wp01 = '---\nwork_package_id: "WP01"\ntitle: "WP01 test"\nlane: "doing"\nchange_stack: false\ndependencies: ["WP03"]\n---\n# WP01\n'
+        tasks_dir.mkdir(parents=True, exist_ok=True)
+        (tasks_dir / "WP01-test.md").write_text(content_wp01, encoding="utf-8")
+        # WP02 exists so next ID will be WP03
+        self._make_wp_file(tasks_dir, "WP02", "planned")
+
+        with (
+            patch(
+                "specify_cli.cli.commands.agent.change.locate_project_root"
+            ) as mock_root,
+            patch(
+                "specify_cli.cli.commands.agent.change.detect_feature_slug"
+            ) as mock_slug,
+            patch(
+                "specify_cli.core.change_stack.get_current_branch",
+                return_value="029-test",
+            ),
+            patch(
+                "specify_cli.core.change_stack._get_main_repo_root",
+                return_value=tmp_path,
+            ),
+        ):
+            mock_root.return_value = tmp_path
+            mock_slug.return_value = "029-test"
+
+            result = runner.invoke(
+                agent_change_app,
+                [
+                    "apply",
+                    "test-id",
+                    "--request-text",
+                    "apply same pattern as WP01 to auth.py",
+                    "--json",
+                ],
+            )
+            assert result.exit_code == 1
+            data = json.loads(result.output)
+            assert data["error"] == "dependency_validation_failed"
+            # No files should have been written (atomic abort)
+            generated_wps = list(tasks_dir.glob("WP03-*.md"))
+            assert len(generated_wps) == 0
+
+    def test_apply_no_wp_refs_produces_no_dependencies(self, tmp_path: Path) -> None:
+        """Apply with no WP references should produce WP with empty dependencies."""
+        tasks_dir = tmp_path / "kitty-specs" / "029-test" / "tasks"
+        tasks_dir.mkdir(parents=True)
+
+        with (
+            patch(
+                "specify_cli.cli.commands.agent.change.locate_project_root"
+            ) as mock_root,
+            patch(
+                "specify_cli.cli.commands.agent.change.detect_feature_slug"
+            ) as mock_slug,
+            patch(
+                "specify_cli.core.change_stack.get_current_branch",
+                return_value="029-test",
+            ),
+            patch(
+                "specify_cli.core.change_stack._get_main_repo_root",
+                return_value=tmp_path,
+            ),
+        ):
+            mock_root.return_value = tmp_path
+            mock_slug.return_value = "029-test"
+
+            result = runner.invoke(
+                agent_change_app,
+                [
+                    "apply",
+                    "test-id",
+                    "--request-text",
+                    "add caching to the API layer",
+                    "--json",
+                ],
+            )
+            assert result.exit_code == 0
+            data = json.loads(result.output)
+            created = data["createdWorkPackages"]
+            assert len(created) >= 1
+            assert created[0]["dependencies"] == []
+            assert data["consistency"]["dependencyValidationPassed"] is True
