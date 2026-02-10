@@ -7,7 +7,78 @@ All notable changes to the Spec Kitty CLI and templates are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.14.2] - 2026-02-07
+
+### 🐛 Fixed
+
+- **False "behind main" errors for stacked worktree branches**: `move-task --to for_review` now checks against the WP's actual base branch (from workspace context) instead of always checking against the target branch. Stacked WPs (e.g., WP03 based on WP01) no longer produce false "behind main by N commits" errors.
+
+### ✨ Added
+
+- **Worktree topology context for stacked branches**: New `worktree_topology` module auto-detects when WPs are stacked (branched from other WPs) and injects structured JSON topology into implement and review prompts. Agents now understand where their branch fits in the dependency stack. Only activates when stacking is detected — flat features get no extra noise.
+
+## [0.14.1] - 2026-02-04
+
+### 🐛 Fixed
+
+- **Broken import in 0.14.0 migration**: Fixed `ModuleNotFoundError` in `m_0_14_0_centralized_feature_detection` - corrected import paths for `load_agent_config` and `AGENT_DIR_TO_KEY`.
+- **Integration test fixture**: Fixed `clean_project` fixture failing to copy source missions when `.kittify/missions/` already existed with stale leftovers.
+- **Stale mission directory**: Removed orphaned `.kittify/missions/research/` that was left behind when missions were untracked from git.
+
+## [0.14.0] - 2026-02-04
+
+### ✨ Added
+
+**Mission-aware cleanup, docs wiring, and module consolidation** (Feature 029):
+
+- **Documentation mission state initialization**: `spec-kitty agent create-feature --mission documentation` now initializes `documentation_state` in `meta.json` with spec-compliant defaults. New `init-doc-state` command for existing features.
+- **Gap analysis wiring**: Automatically runs gap analysis during `/spec-kitty.plan` and `/spec-kitty.research` for documentation missions in `gap_filling` or `feature_specific` mode. Writes `gap-analysis.md` and updates audit metadata.
+- **Generator auto-detection**: Detects JSDoc, Sphinx, and Rustdoc generators during plan setup for documentation missions. Persists configuration to `documentation_state.generators_configured`.
+- **Documentation validation checks**: New `validators/documentation.py` with 3 checks (`documentation_state_exists`, `gap_analysis_exists`, `audit_recency`). Integrated into acceptance flow - doc validation errors block acceptance.
+- **Shared task helpers module**: `task_helpers_shared.py` consolidates duplicated logic from `tasks_support.py` and `scripts/tasks/task_helpers.py` into a single source of truth (~900 lines of duplication removed).
+- **Shared acceptance core module**: `core/acceptance_core.py` extracts shared acceptance workflow logic from `acceptance.py` and `scripts/tasks/acceptance_support.py`, enabling both to delegate to a single implementation.
+- **Base plan template alignment**: Added feature detection guidance (steps 2a-2d) to the base plan template, matching the software-dev mission template.
+
+### 🧹 Removed
+
+- **Root script duplicates**: Removed `scripts/validate_encoding.py`, `scripts/debug-dashboard-scan.py`, and `scripts/tasks/` which duplicated files already in `src/specify_cli/scripts/`.
+
+### 🐛 Fixed
+
+- **Merge command worktree detection**: Fixed `merge_command` to use the current working directory for branch detection instead of the resolved main repo root, preventing false "Already on target branch" errors when merging from worktrees.
+
+## [0.13.28] - 2026-02-04
+
+### 🐛 Fixed
+
+**Workflow implement now tolerates non-git test repos**:
+- If a workflow prompt is generated in a minimal test repo without `.git`, the command skips workspace creation and still completes
+- Prevents workflow tests from failing on repo scaffolds that only include `.kittify`
+
+## [0.13.27] - 2026-02-04
+
+### 🧹 Removed
+
+**Sync module and WebSocket sync tooling**:
+- Removed `specify_cli.sync` package from mainline 0.13.x
+- Dropped WebSocket sync status command and related dependencies
+- Updated workspace sync docs to use `spec-kitty sync workspace`
+
+## [0.13.26] - 2026-02-04
+
+### 🛠️ Refactored
+
+**Consolidated workflow implement workspace creation**:
+- `spec-kitty agent workflow implement` now delegates workspace creation to `spec-kitty implement` when needed
+- Removes duplicated worktree/sparse-checkout setup in the agent command
+- Prevents agents from creating worktrees from inside another worktree
+
+### 🐛 Fixed
+
+**Clearer recovery guidance for multi-parent merge failures**:
+- When auto-merge fails, instructions now show concrete recovery steps
+- Explicitly warns there is no `spec-kitty agent workflow merge` command
+- Points agents to the correct `spec-kitty agent feature merge` command
 
 ## [0.13.25] - 2026-02-04
 
