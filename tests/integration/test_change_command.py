@@ -11,7 +11,6 @@ import json
 from pathlib import Path
 from unittest.mock import patch
 
-import pytest
 from typer.testing import CliRunner
 
 from specify_cli.cli.commands.agent.change import app as agent_change_app

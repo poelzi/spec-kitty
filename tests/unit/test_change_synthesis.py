@@ -13,12 +13,9 @@ from __future__ import annotations
 
 import re
 from pathlib import Path
-from unittest.mock import patch
 
-import pytest
 
 from specify_cli.core.change_classifier import (
-    ComplexityClassification,
     ComplexityScore,
     PackagingMode,
     ReviewAttention,
@@ -27,9 +24,7 @@ from specify_cli.core.change_classifier import (
 from specify_cli.core.change_stack import (
     AmbiguityResult,
     BranchStash,
-    ChangePlan,
     ChangeRequest,
-    ChangeWorkPackage,
     ClosedReferenceCheck,
     StashScope,
     ValidationState,
@@ -39,7 +34,6 @@ from specify_cli.core.change_stack import (
     _extract_guardrails,
     _mode_to_frontmatter_label,
     _next_wp_id,
-    _render_wp_body,
     _slugify,
     generate_change_work_packages,
     synthesize_change_plan,

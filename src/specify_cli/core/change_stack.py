@@ -9,7 +9,6 @@ for the /spec-kitty.change command.
 from __future__ import annotations
 
 import re
-import textwrap
 import uuid
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -20,7 +19,6 @@ from typing import Optional
 from specify_cli.core.change_classifier import (
     ComplexityScore,
     PackagingMode,
-    ReviewAttention,
     classify_change_request,
 )
 from specify_cli.core.dependency_graph import (
@@ -30,7 +28,6 @@ from specify_cli.core.dependency_graph import (
 )
 from specify_cli.core.feature_detection import _get_main_repo_root
 from specify_cli.core.git_ops import get_current_branch
-from specify_cli.tasks_support import LANES
 
 # ============================================================================
 # Types
@@ -1064,7 +1061,7 @@ def _render_wp_body(
 
     frontmatter_lines.extend(
         [
-            f"change_stack: true",
+            "change_stack: true",
             f'change_request_id: "{wp.change_request_id}"',
             f'change_mode: "{wp.change_mode}"',
             f"stack_rank: {wp.stack_rank}",
@@ -1095,7 +1092,7 @@ def _render_wp_body(
     body_parts = [
         f"# {wp.work_package_id}: {wp.title}",
         "",
-        f"**Implementation command:**",
+        "**Implementation command:**",
         "```bash",
         implementation_hint,
         "```",
@@ -1202,7 +1199,6 @@ def _extract_guardrails(request_text: str) -> list[str]:
         List of guardrail strings
     """
     guardrails: list[str] = []
-    text_lower = request_text.lower()
 
     # Check for "must" / "must not" / "do not" / "never" / "always" patterns
     constraint_patterns = [
@@ -1622,7 +1618,7 @@ def _build_tasks_doc_section(wp: ChangeWorkPackage) -> str:
         f"### {wp.work_package_id}: {wp.title}",
         "",
         f"- **Lane**: {wp.lane}",
-        f"- **Change Stack**: Yes",
+        "- **Change Stack**: Yes",
         f"- **Mode**: {wp.change_mode}",
     ]
     if wp.dependencies:

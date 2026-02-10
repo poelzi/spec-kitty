@@ -5,12 +5,8 @@ Tests the selection matrix: ready change WP, blocked stack, normal fallback.
 
 from __future__ import annotations
 
-import re
 from pathlib import Path
-from typing import Optional
-from unittest.mock import patch
 
-import pytest
 
 from specify_cli.core.change_stack import (
     StackSelectionResult,

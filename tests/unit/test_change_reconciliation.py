@@ -9,7 +9,6 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-import pytest
 from specify_cli.core.change_classifier import PackagingMode
 from specify_cli.core.change_stack import (
     ChangePlan,

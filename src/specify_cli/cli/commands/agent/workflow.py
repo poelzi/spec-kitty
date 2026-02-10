@@ -29,7 +29,6 @@ from specify_cli.tasks_support import (
     append_activity_log,
     build_document,
     extract_scalar,
-    find_repo_root,
     locate_work_package,
     set_scalar,
     split_frontmatter,
@@ -279,7 +278,7 @@ def _ensure_sparse_checkout(worktree_path: Path) -> bool:
         if orphan_kitty.exists():
             shutil.rmtree(orphan_kitty)
             print(
-                f"✓ Removed orphaned kitty-specs/ from worktree (now uses planning repo)"
+                "✓ Removed orphaned kitty-specs/ from worktree (now uses planning repo)"
             )
 
     return True
@@ -510,9 +509,9 @@ def implement(
 
             if isinstance(last_selection, StackSelectionResult):
                 if last_selection.selected_source == "change_stack":
-                    print(f"ℹ️  Selected from change stack (stack-first priority)")
+                    print("ℹ️  Selected from change stack (stack-first priority)")
                 elif last_selection.selected_source == "normal_backlog":
-                    print(f"ℹ️  Selected from normal backlog (no change stack items)")
+                    print("ℹ️  Selected from normal backlog (no change stack items)")
         _clear_stack_selection()
 
         # ALWAYS validate dependencies before creating workspace or displaying prompts
@@ -803,32 +802,32 @@ def implement(
         lines.append("=" * 80)
         lines.append("WHEN YOU'RE DONE:")
         lines.append("=" * 80)
-        lines.append(f"✓ Implementation complete and tested:")
-        lines.append(f"  1. **Commit your implementation files:**")
-        lines.append(f"     git status  # Check what you changed")
-        lines.append(f"     git add <your-implementation-files>  # NOT WP status files")
+        lines.append("✓ Implementation complete and tested:")
+        lines.append("  1. **Commit your implementation files:**")
+        lines.append("     git status  # Check what you changed")
+        lines.append("     git add <your-implementation-files>  # NOT WP status files")
         lines.append(
             f'     git commit -m "feat({normalized_wp_id}): <brief description>"'
         )
-        lines.append(f"     git log -1 --oneline  # Verify commit succeeded")
-        lines.append(f"  2. Mark all subtasks as done:")
+        lines.append("     git log -1 --oneline  # Verify commit succeeded")
+        lines.append("  2. Mark all subtasks as done:")
         lines.append(
-            f"     spec-kitty agent tasks mark-status T001 T002 T003 --status done"
+            "     spec-kitty agent tasks mark-status T001 T002 T003 --status done"
         )
-        lines.append(f"  3. Move WP to review:")
+        lines.append("  3. Move WP to review:")
         lines.append(
             f'     spec-kitty agent tasks move-task {normalized_wp_id} --to for_review --note "Ready for review"'
         )
         lines.append("")
-        lines.append(f"✗ Blocked or cannot complete:")
+        lines.append("✗ Blocked or cannot complete:")
         lines.append(
             f'  spec-kitty agent tasks add-history {normalized_wp_id} --note "Blocked: <reason>"'
         )
         lines.append("=" * 80)
         lines.append("")
-        lines.append(f"📍 WORKING DIRECTORY:")
+        lines.append("📍 WORKING DIRECTORY:")
         lines.append(f"   cd {workspace_path}")
-        lines.append(f"   # All implementation work happens in this workspace")
+        lines.append("   # All implementation work happens in this workspace")
         lines.append(f"   # When done, return to repo root: cd {repo_root}")
         lines.append("")
         lines.append("📋 STATUS TRACKING:")
@@ -838,7 +837,7 @@ def implement(
         lines.append(
             f"   Status changes auto-commit to {target_branch} branch (visible to all agents)"
         )
-        lines.append(f"   ⚠️  You will see commits from other agents - IGNORE THEM")
+        lines.append("   ⚠️  You will see commits from other agents - IGNORE THEM")
         lines.append("=" * 80)
         lines.append("")
 
@@ -912,29 +911,29 @@ def implement(
         lines.append("🎯 IMPLEMENTATION COMPLETE? RUN THESE COMMANDS:")
         lines.append("=" * 80)
         lines.append("")
-        lines.append(f"✅ Implementation complete and tested:")
-        lines.append(f"   1. **Commit your implementation files:**")
-        lines.append(f"      git status  # Check what you changed")
+        lines.append("✅ Implementation complete and tested:")
+        lines.append("   1. **Commit your implementation files:**")
+        lines.append("      git status  # Check what you changed")
         lines.append(
-            f"      git add <your-implementation-files>  # NOT WP status files"
+            "      git add <your-implementation-files>  # NOT WP status files"
         )
         lines.append(
             f'      git commit -m "feat({normalized_wp_id}): <brief description>"'
         )
-        lines.append(f"      git log -1 --oneline  # Verify commit succeeded")
+        lines.append("      git log -1 --oneline  # Verify commit succeeded")
         lines.append(
-            f"      (Use fix: for bugs, chore: for maintenance, docs: for documentation)"
+            "      (Use fix: for bugs, chore: for maintenance, docs: for documentation)"
         )
-        lines.append(f"   2. Mark all subtasks as done:")
+        lines.append("   2. Mark all subtasks as done:")
         lines.append(
-            f"      spec-kitty agent tasks mark-status T001 T002 T003 --status done"
+            "      spec-kitty agent tasks mark-status T001 T002 T003 --status done"
         )
-        lines.append(f"   3. Move WP to review (will check for uncommitted changes):")
+        lines.append("   3. Move WP to review (will check for uncommitted changes):")
         lines.append(
             f'      spec-kitty agent tasks move-task {normalized_wp_id} --to for_review --note "Ready for review: <summary>"'
         )
         lines.append("")
-        lines.append(f"⚠️  Blocked or cannot complete:")
+        lines.append("⚠️  Blocked or cannot complete:")
         lines.append(
             f'   spec-kitty agent tasks add-history {normalized_wp_id} --note "Blocked: <reason>"'
         )
@@ -956,10 +955,10 @@ def implement(
         print()
         print(f"📍 Workspace: cd {workspace_path}")
         if has_feedback:
-            print(f"⚠️  Has review feedback - check prompt file")
+            print("⚠️  Has review feedback - check prompt file")
         if mission_key == "research" and deliverables_path:
             print(f"🔬 Research deliverables: {deliverables_path}")
-            print(f"   (NOT in kitty-specs/ - those are planning artifacts)")
+            print("   (NOT in kitty-specs/ - those are planning artifacts)")
         print()
         print("▶▶▶ NEXT STEP: Read the full prompt file now:")
         print(f"    cat {prompt_file}")
@@ -968,11 +967,11 @@ def implement(
         print(
             f'  1. git status && git add <your-files> && git commit -m "feat({normalized_wp_id}): <description>"'
         )
-        print(f"  2. spec-kitty agent tasks mark-status T001 T002 ... --status done")
+        print("  2. spec-kitty agent tasks mark-status T001 T002 ... --status done")
         print(
             f'  3. spec-kitty agent tasks move-task {normalized_wp_id} --to for_review --note "Ready for review"'
         )
-        print(f"     (Pre-flight check will verify no uncommitted changes)")
+        print("     (Pre-flight check will verify no uncommitted changes)")
 
     except Exception as e:
         print(f"Error: {e}")
@@ -1459,22 +1458,22 @@ def review(
         lines.append("=" * 80)
         lines.append("WHEN YOU'RE DONE:")
         lines.append("=" * 80)
-        lines.append(f"✓ Review passed, no issues:")
+        lines.append("✓ Review passed, no issues:")
         lines.append(
             f'  spec-kitty agent tasks move-task {normalized_wp_id} --to done --note "Review passed"'
         )
         lines.append("")
-        lines.append(f"⚠️  Changes requested:")
-        lines.append(f"  1. Add feedback to the WP file's '## Review Feedback' section")
+        lines.append("⚠️  Changes requested:")
+        lines.append("  1. Add feedback to the WP file's '## Review Feedback' section")
         lines.append(
             f'  2. spec-kitty agent tasks move-task {normalized_wp_id} --to planned --note "Changes requested"'
         )
         lines.append("=" * 80)
         lines.append("")
-        lines.append(f"📍 WORKING DIRECTORY:")
+        lines.append("📍 WORKING DIRECTORY:")
         lines.append(f"   cd {workspace_path}")
-        lines.append(f"   # Review the implementation in this workspace")
-        lines.append(f"   # Read code, run tests, check against requirements")
+        lines.append("   # Review the implementation in this workspace")
+        lines.append("   # Read code, run tests, check against requirements")
         lines.append(f"   # When done, return to repo root: cd {repo_root}")
         lines.append("")
         lines.append("📋 STATUS TRACKING:")
@@ -1484,7 +1483,7 @@ def review(
         lines.append(
             f"   Status changes auto-commit to {target_branch} branch (visible to all agents)"
         )
-        lines.append(f"   ⚠️  You will see commits from other agents - IGNORE THEM")
+        lines.append("   ⚠️  You will see commits from other agents - IGNORE THEM")
         lines.append("=" * 80)
         lines.append("")
         lines.append("Review the implementation against the requirements below.")
@@ -1512,7 +1511,7 @@ def review(
         lines.append("🎯 REVIEW COMPLETE? RUN ONE OF THESE COMMANDS:")
         lines.append("=" * 80)
         lines.append("")
-        lines.append(f"✅ APPROVE (no issues found):")
+        lines.append("✅ APPROVE (no issues found):")
         lines.append(
             f'   spec-kitty agent tasks move-task {normalized_wp_id} --to done --note "Review passed: <summary>"'
         )
@@ -1523,14 +1522,14 @@ def review(
             / f"spec-kitty-review-feedback-{normalized_wp_id}.md"
         )
 
-        lines.append(f"❌ REQUEST CHANGES (issues found):")
-        lines.append(f"   1. Write feedback:")
+        lines.append("❌ REQUEST CHANGES (issues found):")
+        lines.append("   1. Write feedback:")
         lines.append(f"      cat > {review_feedback_path} <<'EOF'")
-        lines.append(f"**Issue 1**: <description and how to fix>")
-        lines.append(f"**Issue 2**: <description and how to fix>")
-        lines.append(f"EOF")
+        lines.append("**Issue 1**: <description and how to fix>")
+        lines.append("**Issue 2**: <description and how to fix>")
+        lines.append("EOF")
         lines.append("")
-        lines.append(f"   2. Move to planned with feedback:")
+        lines.append("   2. Move to planned with feedback:")
         lines.append(
             f"      spec-kitty agent tasks move-task {normalized_wp_id} --to planned --review-feedback-file {review_feedback_path}"
         )

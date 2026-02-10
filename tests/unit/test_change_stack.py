@@ -20,13 +20,8 @@ from unittest.mock import patch
 import pytest
 
 from specify_cli.core.change_stack import (
-    AmbiguityResult,
-    BranchStash,
     ChangeStackError,
-    ClosedReferenceCheck,
     DependencyEdge,
-    DependencyPolicyResult,
-    StackSelectionResult,
     StashScope,
     ValidationState,
     _extract_feature_slug,

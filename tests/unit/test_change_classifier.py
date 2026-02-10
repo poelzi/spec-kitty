@@ -18,7 +18,6 @@ from specify_cli.core.change_classifier import (
     SIMPLE_MAX,
     TOTAL_MAX,
     ComplexityClassification,
-    ComplexityScore,
     PackagingMode,
     ReviewAttention,
     classify_change_request,

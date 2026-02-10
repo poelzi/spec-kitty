@@ -9,7 +9,6 @@ from typing import Optional
 import typer
 from typing_extensions import Annotated
 
-from specify_cli.core.change_classifier import ComplexityClassification
 from specify_cli.core.change_stack import (
     ChangeStackError,
     ValidationState,
@@ -23,7 +22,6 @@ from specify_cli.core.change_stack import (
     persist_merge_coordination_jobs,
     reconcile_change_stack,
     resolve_next_change_wp,
-    resolve_stash,
     synthesize_change_plan,
     validate_change_request,
     validate_dependency_graph_integrity,
@@ -440,7 +438,6 @@ def reconcile(
     tasks_dir = feature_dir / "tasks"
 
     # Run reconciliation (no new WPs - reconcile existing state)
-    from specify_cli.core.change_stack import validate_all_dependencies
 
     consistency = reconcile_change_stack(tasks_dir, feature_dir, [])
 
