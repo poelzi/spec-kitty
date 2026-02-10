@@ -393,7 +393,14 @@ class TestApplyContinueGate:
             assert data["requestId"] == "test-id"
             # When --continue is used with high complexity, result should include scoring
             if "complexity" in data:
-                assert "reviewAttention" in data["complexity"]
+                assert data["complexity"]["reviewAttention"] == "elevated"
+            # Verify generated WP files have elevated review_attention in frontmatter
+            if "writtenFiles" in data and data["writtenFiles"]:
+                for fpath in data["writtenFiles"]:
+                    content = Path(fpath).read_text(encoding="utf-8")
+                    assert 'review_attention: "elevated"' in content, (
+                        f"Generated WP {fpath} missing elevated review_attention"
+                    )
 
     def test_apply_requires_request_text(self) -> None:
         """Apply without --request-text should fail (required for complexity gating)."""
