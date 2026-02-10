@@ -10,24 +10,22 @@ import json
 from pathlib import Path
 
 import pytest
-
+from specify_cli.core.change_classifier import PackagingMode
 from specify_cli.core.change_stack import (
-    ChangeWorkPackage,
     ChangePlan,
+    ChangeWorkPackage,
     ConsistencyReport,
     MergeCoordinationJob,
-    reconcile_tasks_doc,
-    reconcile_change_stack,
-    validate_all_dependencies,
+    _build_tasks_doc_section,
+    _find_active_wps,
+    _fix_broken_prompt_links,
+    _parse_wp_sections,
     compute_merge_coordination_jobs,
     persist_merge_coordination_jobs,
-    _parse_wp_sections,
-    _build_tasks_doc_section,
-    _fix_broken_prompt_links,
-    _find_active_wps,
+    reconcile_change_stack,
+    reconcile_tasks_doc,
+    validate_all_dependencies,
 )
-from specify_cli.core.change_classifier import PackagingMode
-
 
 # ============================================================================
 # Helpers
@@ -83,7 +81,9 @@ def _create_wp_file(
     deps_yaml = ""
     if dependencies:
         deps_yaml = "\ndependencies:\n" + "\n".join(f'  - "{d}"' for d in dependencies)
-    change_yaml = f"\nchange_stack: true\nstack_rank: {stack_rank}" if change_stack else ""
+    change_yaml = (
+        f"\nchange_stack: true\nstack_rank: {stack_rank}" if change_stack else ""
+    )
     slug = wp_id.lower().replace("wp", "wp-task")
     content = (
         f"---\n"
@@ -231,10 +231,7 @@ class TestParseWpSections:
         assert "Fix caching" in result["WP09"]
 
     def test_multiple_sections(self) -> None:
-        content = (
-            "### WP09: First\n\nDetails\n"
-            "### WP10: Second\n\nMore details\n"
-        )
+        content = "### WP09: First\n\nDetails\n### WP10: Second\n\nMore details\n"
         result = _parse_wp_sections(content)
         assert "WP09" in result
         assert "WP10" in result
@@ -368,19 +365,44 @@ class TestFixBrokenPromptLinks:
 
         count = _fix_broken_prompt_links(tasks_dir, feature_dir)
         assert count == 0
+        # Content should be unchanged
+        content = (feature_dir / "tasks.md").read_text(encoding="utf-8")
+        assert "`tasks/WP01-setup.md`" in content
 
-    def test_detects_broken_link(self, tmp_path: Path) -> None:
+    def test_fixes_broken_link_by_removing_line(self, tmp_path: Path) -> None:
         tasks_dir = tmp_path / "tasks"
         tasks_dir.mkdir()
         feature_dir = tmp_path
 
         (feature_dir / "tasks.md").write_text(
-            "**Prompt**: `tasks/WP99-missing.md`\n",
+            "# Tasks\n\n**Prompt**: `tasks/WP99-missing.md`\n\nOther content\n",
             encoding="utf-8",
         )
 
         count = _fix_broken_prompt_links(tasks_dir, feature_dir)
         assert count == 1
+        # Verify the broken link line was actually removed from the file
+        content = (feature_dir / "tasks.md").read_text(encoding="utf-8")
+        assert "`tasks/WP99-missing.md`" not in content
+        assert "Other content" in content
+        assert "# Tasks" in content
+
+    def test_preserves_valid_links_while_removing_broken(self, tmp_path: Path) -> None:
+        tasks_dir = tmp_path / "tasks"
+        tasks_dir.mkdir()
+        feature_dir = tmp_path
+
+        (tasks_dir / "WP01-setup.md").write_text("---\n---\n", encoding="utf-8")
+        (feature_dir / "tasks.md").write_text(
+            "**Prompt**: `tasks/WP01-setup.md`\n**Prompt**: `tasks/WP99-missing.md`\n",
+            encoding="utf-8",
+        )
+
+        count = _fix_broken_prompt_links(tasks_dir, feature_dir)
+        assert count == 1
+        content = (feature_dir / "tasks.md").read_text(encoding="utf-8")
+        assert "`tasks/WP01-setup.md`" in content
+        assert "`tasks/WP99-missing.md`" not in content
 
 
 # ============================================================================
@@ -530,10 +552,14 @@ class TestPersistMergeCoordinationJobs:
 
     def test_idempotent_merge(self, tmp_path: Path) -> None:
         job1 = MergeCoordinationJob(
-            job_id="mcj-1", reason="First", source_wp="WP09",
+            job_id="mcj-1",
+            reason="First",
+            source_wp="WP09",
         )
         job2 = MergeCoordinationJob(
-            job_id="mcj-2", reason="Second", source_wp="WP10",
+            job_id="mcj-2",
+            reason="Second",
+            source_wp="WP10",
         )
 
         persist_merge_coordination_jobs([job1], tmp_path)
@@ -545,10 +571,14 @@ class TestPersistMergeCoordinationJobs:
 
     def test_updates_existing_job(self, tmp_path: Path) -> None:
         job_v1 = MergeCoordinationJob(
-            job_id="mcj-1", reason="Original", source_wp="WP09",
+            job_id="mcj-1",
+            reason="Original",
+            source_wp="WP09",
         )
         job_v2 = MergeCoordinationJob(
-            job_id="mcj-1", reason="Updated", source_wp="WP09",
+            job_id="mcj-1",
+            reason="Updated",
+            source_wp="WP09",
         )
 
         persist_merge_coordination_jobs([job_v1], tmp_path)
@@ -591,6 +621,8 @@ class TestMergeCoordinationJobSerialization:
 
     def test_json_serializable(self) -> None:
         job = MergeCoordinationJob(
-            job_id="mcj-1", reason="Test", source_wp="WP09",
+            job_id="mcj-1",
+            reason="Test",
+            source_wp="WP09",
         )
         json.dumps(job.to_dict())
