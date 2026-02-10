@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json as json_mod
 from pathlib import Path
 from typing import Optional
 
@@ -9,24 +10,33 @@ import typer
 from rich.console import Console
 
 from specify_cli.cli import StepTracker
-from specify_cli.cli.helpers import check_version_compatibility, get_project_root_or_exit, show_banner
-from specify_cli.core.change_classifier import ComplexityClassification
-from specify_cli.core.change_stack import (
-    ChangeStackError,
-    ValidationState,
-    validate_change_request,
+from specify_cli.cli.helpers import (
+    check_version_compatibility,
+    get_project_root_or_exit,
+    show_banner,
+)
+from specify_cli.core.feature_detection import (
+    FeatureDetectionError,
+    detect_feature_slug,
 )
 from specify_cli.tasks_support import TaskCliError, find_repo_root
-
 
 console = Console()
 
 
 def change(
-    request: Optional[str] = typer.Argument(None, help="Change request description (interactive if omitted)"),
-    feature: Optional[str] = typer.Option(None, "--feature", help="Feature slug to target (auto-detected when omitted)"),
-    json_output: Optional[str] = typer.Option(None, "--json", help="Write JSON output to this path"),
-    preview: bool = typer.Option(False, "--preview", help="Preview change plan without applying"),
+    request: Optional[str] = typer.Argument(
+        None, help="Change request description (interactive if omitted)"
+    ),
+    feature: Optional[str] = typer.Option(
+        None, "--feature", help="Feature slug to target (auto-detected when omitted)"
+    ),
+    json_output: Optional[str] = typer.Option(
+        None, "--json", help="Write JSON output to this path"
+    ),
+    preview: bool = typer.Option(
+        False, "--preview", help="Preview change plan without applying"
+    ),
 ) -> None:
     """Capture a mid-implementation change request and create work packages.
 
@@ -59,7 +69,7 @@ def change(
 
     tracker = StepTracker("Change Request")
     tracker.add("project", "Locate project root")
-    tracker.add("route", "Resolve branch stash")
+    tracker.add("feature", "Resolve feature context")
     tracker.add("validate", "Validate change request")
     tracker.add("assess", "Assess complexity")
     tracker.add("plan", "Plan work packages")
@@ -69,10 +79,23 @@ def change(
     tracker.start("project")
     tracker.complete("project", str(project_root))
 
-    # Step 2: Resolve branch stash and validate request
-    tracker.start("route")
+    # Step 2: Resolve feature context
+    tracker.start("feature")
+    try:
+        feature_slug = (
+            feature or detect_feature_slug(repo_root, cwd=Path.cwd())
+        ).strip()
+    except (FeatureDetectionError, Exception) as exc:
+        tracker.error("feature", str(exc))
+        console.print(tracker.render())
+        console.print(f"[red]Error:[/red] {exc}")
+        raise typer.Exit(1)
+    tracker.complete("feature", feature_slug)
+
+    # Step 3-5: Stubbed for WP01 - actual implementation in later WPs
+    tracker.start("validate")
     if not request:
-        tracker.error("route", "No change request provided")
+        tracker.error("validate", "No change request provided")
         console.print(tracker.render())
         console.print()
         console.print("[yellow]Usage:[/yellow]")
@@ -80,93 +103,53 @@ def change(
         console.print()
         console.print("[dim]Interactive mode not yet implemented.[/dim]")
         raise typer.Exit(1)
+    tracker.complete("validate", "Request accepted")
 
-    try:
-        change_req = validate_change_request(
-            request_text=request,
-            repo_root=repo_root,
-            feature=feature,
-        )
-    except ChangeStackError as exc:
-        tracker.error("route", str(exc))
-        console.print(tracker.render())
-        console.print(f"[red]Error:[/red] {exc}")
-        raise typer.Exit(1)
-
-    tracker.complete("route", f"{change_req.stash.scope.value}: {change_req.stash.stash_key}")
-
-    # Step 3: Validate - check ambiguity (fail-fast per FR-002A)
-    tracker.start("validate")
-    if change_req.validation_state == ValidationState.AMBIGUOUS:
-        tracker.error("validate", "Ambiguous request - clarification needed")
-        console.print(tracker.render())
-        console.print()
-        console.print("[red]Error:[/red] Change request is ambiguous.")
-        if change_req.ambiguity.clarification_prompt:
-            console.print()
-            console.print(change_req.ambiguity.clarification_prompt)
-        raise typer.Exit(1)
-
-    # Report closed references (link-only, FR-016)
-    if change_req.closed_references.has_closed_references:
-        closed_ids = ", ".join(change_req.closed_references.closed_wp_ids)
-        console.print(f"[yellow]Note:[/yellow] Request references closed WP(s): {closed_ids}")
-        console.print("[dim]These will be linked as historical context (not reopened).[/dim]")
-
-    tracker.complete("validate", "Request validated")
-
-    # Step 4: Complexity assessment (FR-009, FR-010)
     tracker.start("assess")
-    score = change_req.complexity_score
-    if score is None:
-        tracker.error("assess", "Scoring failed")
-        console.print(tracker.render())
-        raise typer.Exit(1)
-
-    tracker.complete(
-        "assess",
-        f"{score.classification.value} (score {score.total_score}/10)",
-    )
-
-    # FR-010: High complexity warning with recommend /spec-kitty.specify
-    if score.recommend_specify:
-        console.print()
-        console.print(
-            "[yellow]Warning:[/yellow] This change request exceeds the "
-            "complexity threshold (score {}/{}).".format(score.total_score, 10)
-        )
-        console.print(
-            "[yellow]Recommendation:[/yellow] Use [bold]/spec-kitty.specify[/bold] "
-            "for full planning."
-        )
-        console.print()
-        console.print("Score breakdown:")
-        console.print(f"  Scope breadth:    {score.scope_breadth_score}/3")
-        console.print(f"  Coupling impact:  {score.coupling_score}/2")
-        console.print(f"  Dependency churn: {score.dependency_churn_score}/2")
-        console.print(f"  Ambiguity:        {score.ambiguity_score}/2")
-        console.print(f"  Integration risk: {score.integration_risk_score}/1")
-        console.print(f"  [bold]Total:            {score.total_score}/10[/bold]")
-        console.print()
-        console.print(
-            "To continue anyway, use: "
-            "[bold]spec-kitty agent change apply <request-id> --continue[/bold]"
-        )
-
-    # Step 5: Plan work packages (stubbed for WP04)
-    tracker.start("plan")
-    tracker.complete("plan", f"Mode: {score.proposed_mode.value} (WP04 for full synthesis)")
-
-    console.print(tracker.render())
+    tracker.complete("assess", "Stubbed (WP03)")
 
     if preview:
+        console.print(tracker.render())
         console.print()
-        console.print("[cyan]Preview mode:[/cyan] No work packages created.")
-        console.print(f"  Stash: {change_req.stash.stash_path}")
-        console.print(f"  Scope: {change_req.stash.scope.value}")
-        console.print(f"  Request ID: {change_req.request_id}")
-        console.print(f"  Complexity: {score.classification.value} ({score.total_score}/10)")
-        console.print(f"  Packaging: {score.proposed_mode.value}")
+        console.print(
+            "[yellow]Preview mode:[/yellow] Would assess complexity and plan work packages."
+        )
+        console.print(f"  Feature: {feature_slug}")
+        console.print(f"  Request: {request}")
+        console.print(
+            "[dim]Full preview (classification, dependency analysis) will be added in WP03.[/dim]"
+        )
+        result = {
+            "mode": "preview",
+            "feature": feature_slug,
+            "request": request,
+            "status": "stubbed",
+        }
+        if json_output:
+            Path(json_output).write_text(
+                json_mod.dumps(result, indent=2), encoding="utf-8"
+            )
+        return
+
+    tracker.start("plan")
+    tracker.complete("plan", "Stubbed (WP04)")
+
+    console.print(tracker.render())
+    console.print()
+    console.print("[yellow]Note:[/yellow] Change command surface registered.")
+    console.print(
+        "[dim]Full implementation (classification, synthesis, dependency linking) will be added in subsequent work packages (WP02-WP08).[/dim]"
+    )
+
+    result = {
+        "mode": "apply",
+        "feature": feature_slug,
+        "request": request,
+        "status": "stubbed",
+        "createdWorkPackages": [],
+    }
+    if json_output:
+        Path(json_output).write_text(json_mod.dumps(result, indent=2), encoding="utf-8")
 
 
 __all__ = ["change"]

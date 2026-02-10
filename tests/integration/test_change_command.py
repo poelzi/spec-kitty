@@ -12,9 +12,10 @@ from pathlib import Path
 from unittest.mock import patch
 
 import pytest
+from typer.testing import CliRunner
+
 from specify_cli.cli.commands.agent.change import app as agent_change_app
 from specify_cli.cli.commands.change import change
-from typer.testing import CliRunner
 
 runner = CliRunner()
 
@@ -57,9 +58,6 @@ class TestChangeCommandRegistration:
 
         command_names = []
         for c in app.registered_commands:
-            command_names.append(
-                c.name or (c.callback.__name__ if c.callback else None)
-            )
             command_names.append(
                 c.name or (c.callback.__name__ if c.callback else None)
             )
@@ -125,6 +123,7 @@ class TestAgentChangePreview:
                 agent_change_app,
                 ["preview", "add caching layer", "--json"],
             )
+            assert result.exit_code == 0
             data = json.loads(result.output)
             complexity = data["complexity"]
             assert "scopeBreadthScore" in complexity
@@ -142,7 +141,6 @@ class TestAgentChangeApply:
 
     def test_apply_returns_json(self, tmp_path):
         """Apply should return structured JSON with required fields."""
-        # Create tasks dir for stash routing
         tasks_dir = tmp_path / "kitty-specs" / "029-test-feature" / "tasks"
         tasks_dir.mkdir(parents=True)
 
@@ -342,6 +340,116 @@ class TestChangeCommandTemplates:
             content = template_path.read_text(encoding="utf-8")
             assert "changeset" not in content.lower()
             assert "changset" not in content.lower()
+
+
+class TestTopLevelChangeCommand:
+    """Test the top-level spec-kitty change command end-to-end."""
+
+    @staticmethod
+    def _make_app():
+        """Create a Typer app with the change command registered."""
+        import typer as _typer
+
+        _app = _typer.Typer()
+        _app.command()(change)
+        return _app
+
+    def test_change_command_completes_without_markup_error(self):
+        """Top-level change command should not crash with Rich MarkupError."""
+        app = self._make_app()
+        with (
+            patch("specify_cli.cli.commands.change.find_repo_root") as mock_root,
+            patch(
+                "specify_cli.cli.commands.change.get_project_root_or_exit"
+            ) as mock_proj,
+            patch("specify_cli.cli.commands.change.check_version_compatibility"),
+            patch(
+                "specify_cli.cli.commands.change.detect_feature_slug",
+                return_value="029-test",
+            ),
+        ):
+            mock_root.return_value = Path("/tmp/fake-repo")
+            mock_proj.return_value = Path("/tmp/fake-repo")
+
+            result = runner.invoke(app, ["use SQLAlchemy instead"])
+            assert result.exit_code == 0
+            assert "Change command surface registered" in result.output
+
+    def test_change_preview_flag_alters_behavior(self):
+        """--preview flag should show preview output instead of apply output."""
+        app = self._make_app()
+        with (
+            patch("specify_cli.cli.commands.change.find_repo_root") as mock_root,
+            patch(
+                "specify_cli.cli.commands.change.get_project_root_or_exit"
+            ) as mock_proj,
+            patch("specify_cli.cli.commands.change.check_version_compatibility"),
+            patch(
+                "specify_cli.cli.commands.change.detect_feature_slug",
+                return_value="029-test",
+            ),
+        ):
+            mock_root.return_value = Path("/tmp/fake-repo")
+            mock_proj.return_value = Path("/tmp/fake-repo")
+
+            result = runner.invoke(app, ["refactor auth", "--preview"])
+            assert result.exit_code == 0
+            assert "Preview mode" in result.output
+            # Should NOT contain the apply-mode message
+            assert "Change command surface registered" not in result.output
+
+    def test_change_json_output_writes_file(self, tmp_path):
+        """--json flag should write structured JSON to the provided path."""
+        app = self._make_app()
+        json_path = tmp_path / "output.json"
+        with (
+            patch("specify_cli.cli.commands.change.find_repo_root") as mock_root,
+            patch(
+                "specify_cli.cli.commands.change.get_project_root_or_exit"
+            ) as mock_proj,
+            patch("specify_cli.cli.commands.change.check_version_compatibility"),
+            patch(
+                "specify_cli.cli.commands.change.detect_feature_slug",
+                return_value="029-test",
+            ),
+        ):
+            mock_root.return_value = Path("/tmp/fake-repo")
+            mock_proj.return_value = Path("/tmp/fake-repo")
+
+            result = runner.invoke(app, ["add caching", "--json", str(json_path)])
+            assert result.exit_code == 0
+            assert json_path.exists()
+            data = json.loads(json_path.read_text())
+            assert data["mode"] == "apply"
+            assert data["feature"] == "029-test"
+            assert "createdWorkPackages" in data
+
+    def test_change_preview_json_output(self, tmp_path):
+        """--preview --json should write preview JSON."""
+        app = self._make_app()
+        json_path = tmp_path / "preview.json"
+        with (
+            patch("specify_cli.cli.commands.change.find_repo_root") as mock_root,
+            patch(
+                "specify_cli.cli.commands.change.get_project_root_or_exit"
+            ) as mock_proj,
+            patch("specify_cli.cli.commands.change.check_version_compatibility"),
+            patch(
+                "specify_cli.cli.commands.change.detect_feature_slug",
+                return_value="029-test",
+            ),
+        ):
+            mock_root.return_value = Path("/tmp/fake-repo")
+            mock_proj.return_value = Path("/tmp/fake-repo")
+
+            result = runner.invoke(
+                app, ["refactor auth", "--preview", "--json", str(json_path)]
+            )
+            assert result.exit_code == 0
+            assert json_path.exists()
+            data = json.loads(json_path.read_text())
+            assert data["mode"] == "preview"
+            assert data["request"] == "refactor auth"
 
 
 class TestInitFlowIncludesChange:
