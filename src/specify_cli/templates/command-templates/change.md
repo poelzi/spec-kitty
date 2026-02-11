@@ -7,23 +7,13 @@ description: Capture a mid-implementation change request and create dependency-s
 **Version**: 0.14.0+
 **Purpose**: Capture review feedback or implementation pivots as branch-aware, dependency-safe work packages.
 
-**Path reference rule:** When you mention directories or files, provide either the absolute path or a path relative to the project root (for example, `kitty-specs/<feature>/tasks/`). Never refer to a folder by name alone.
+## When to Use
 
-## Working Directory and Routing
-
-- Run from the project root (planning repository).
-- This workflow does not create worktrees.
-- Change requests are routed automatically:
-  - Feature scope -> `kitty-specs/<feature>/tasks/`
-  - Primary branch scope -> `kitty-specs/change-stack/main/`
-
-## User Input
-
-```text
-$ARGUMENTS
-```
-
-You **MUST** consider the user input before proceeding (if not empty).
+Use `/spec-kitty.change` when you need to:
+- Capture review feedback as actionable work packages during implementation
+- Handle implementation pivots ("use this library instead")
+- Add late-stage requirements without disrupting ongoing work
+- Create small fixes on `main` with complexity guidance
 
 ## Command Surface
 
@@ -40,117 +30,91 @@ spec-kitty change "refactor auth module" --preview
 spec-kitty change "add caching layer" --json output.json
 ```
 
-### Agent Commands (recommended for deterministic flow)
+### Agent Subcommands
+
+For programmatic use by AI agents:
 
 ```bash
 # Step 1: Preview - validate and classify before writing files
-spec-kitty agent change preview "$ARGUMENTS" --json
+spec-kitty agent change preview "your change request" --json
 
-# Step 2: Apply - create WPs from validated request
-# --request-text is REQUIRED
-spec-kitty agent change apply <request-id> --request-text "$ARGUMENTS" --json
+# Step 2: Apply - create work packages (with AI-assessed complexity scores)
+spec-kitty agent change apply <request-id> \
+  --request-text "your change request" \
+  --scope-breadth <0-3> --coupling <0-2> --dependency-churn <0-2> \
+  --ambiguity <0-2> --integration-risk <0-1> \
+  --json
 
 # Stack-first selection - get next doable WP with change priority
 spec-kitty agent change next --json
 
-# Reconcile - recompute links and dependency consistency
+# Reconcile - recompute links and merge coordination jobs
 spec-kitty agent change reconcile --json
 ```
 
-## Required Execution Flow
+## Workflow
 
-1. **Preview and classify first**:
-   - Run `spec-kitty agent change preview "$ARGUMENTS" --json`.
-   - Parse and retain: `requestId`, `stashScope`, `stashPath`, `validationState`, `complexity`, `proposedMode`, `warningRequired`, `warningMessage`, `requiresClarification`.
+1. **Preview**: Validates the request, routes to correct branch stash, checks ambiguity
+2. **Assess complexity**: The AI agent scores 5 factors based on request context
+3. **Decide**: If total score >= 7 (high), recommends `/spec-kitty.specify` with continue-or-stop choice
+4. **Apply**: Creates change work packages with dependencies, documentation links, and testing tasks
+5. **Implement**: Change-stack items take priority in `/spec-kitty.implement` selection
 
-2. **Resolve ambiguity before apply**:
-   - If `requiresClarification=true` or `validationState` is ambiguous, ask focused clarifying questions.
-   - Re-run preview until the request is unambiguous.
-   - Do not apply while ambiguity remains.
+## Branch Stash Routing
 
-3. **Enforce complexity gate**:
-   - If `warningRequired=true`, recommend `/spec-kitty.specify` for full planning.
-   - Only proceed with apply when the user explicitly chooses to continue.
-   - When continuing despite the warning, include `--continue` on apply.
+- **Feature branch**: Routes to feature stash (`kitty-specs/<feature>/tasks/`)
+- **Main/primary branch**: Routes to embedded main stash (`kitty-specs/change-stack/main/`)
+- Detection covers `main`, `master`, and other primary branch patterns
 
-4. **Apply with full arguments**:
-   - Run:
-     `spec-kitty agent change apply <request-id> --request-text "$ARGUMENTS" [--continue] --json`
-   - Parse and retain: `createdWorkPackages`, `writtenFiles`, `closedReferenceLinks`, `mergeCoordinationJobs`, `consistency`, `rejectedEdges`, `mode`.
+## Complexity Assessment
 
-5. **Reconcile after apply**:
-   - Run `spec-kitty agent change reconcile --feature <feature-slug> --json`.
-   - Confirm:
-     - `dependencyValidationPassed=true`
-     - `issues=[]` (or explicitly reported and actionable)
-   - If reconciliation reports issues, stop and report blockers.
+The AI agent assesses complexity across 5 dimensions and passes scores to the apply command:
 
-6. **Quality-normalize every generated WP** (mandatory):
-   - Review every file in `writtenFiles` and ensure each new WP is implementation-ready.
-   - Apply the same quality bar used by `/spec-kitty.plan` and `/spec-kitty.tasks`:
-     - Clear objective and scope tied to the change request.
-     - Dependency-aware implementation command (`spec-kitty implement WP##` or `spec-kitty implement WP## --base WP##`).
-     - Concrete implementation guidance (components/files, constraints, edge cases).
-     - Explicit acceptance constraints and review expectations.
-     - Final testing closure (regression + new change coverage).
-     - Frontmatter correctness (`lane: "planned"`, `dependencies`, change metadata, history entry).
-   - If generated content is too shallow, enrich the WP prompt before hand-off.
-   - Keep all WPs in flat `tasks/` (never lane subdirectories).
+| Factor | Range | Guidance |
+|--------|-------|----------|
+| Scope breadth | 0-3 | 0=single target, 1=2-3 targets, 2=multiple modules, 3=cross-cutting |
+| Coupling | 0-2 | 0=isolated, 1=shared interfaces, 2=API contracts/schema changes |
+| Dependency churn | 0-2 | 0=none, 1=add/update packages, 2=replace frameworks |
+| Ambiguity | 0-2 | 0=clear, 1=hedging language, 2=vague goals |
+| Integration risk | 0-1 | 0=localized, 1=CI/CD/deploy/infra |
 
-7. **Report and hand-off**:
-   - Report:
-     - `requestId`
-     - stash scope/path
-     - complexity mode and warning status
-     - created WP IDs and prompt paths
-     - dependency and reconciliation status
-     - merge coordination jobs (if any)
-   - Suggest next commands:
-     - `spec-kitty agent change next --json`
-     - `spec-kitty agent workflow implement <WP##> --agent <your-agent-name>`
+**Thresholds** (total score):
+- 0-3: simple (single change WP)
+- 4-6: complex (adaptive packaging)
+- 7-10: high (recommend `/spec-kitty.specify`, require `--continue`)
 
-## Work Package Quality Standard (same as /plan and /tasks)
+## Key Behaviors
 
-When a change request creates new WPs, apply these standards before considering the output complete:
+- **Fail-fast**: Ambiguous requests are rejected before any files are created
+- **Append-only**: Never rewrites existing WP bodies
+- **Link-only for closed WPs**: References closed WPs without reopening them
+- **Stack-first ordering**: Ready change WPs execute before normal backlog
+- **Testing closure**: Every generated change WP includes a final testing task
 
-- **Context grounding first**:
-  - Read `kitty-specs/<feature>/spec.md`, `kitty-specs/<feature>/plan.md`, and `kitty-specs/<feature>/tasks.md`.
-  - Ensure each new change WP is consistent with existing architecture and sequencing.
+## User Input
 
-- **Sizing and depth**:
-  - Target the same practical density used by `/spec-kitty.tasks`: focused, implementable guidance rather than vague summaries.
-  - For manually expanded or split change WPs, use the same sizing logic:
-    - target 3-7 subtasks (or equivalent guidance depth)
-    - hard max ~10 subtasks / ~700 lines before splitting
-
-- **Dependency correctness**:
-  - Dependencies in frontmatter must match both `tasks.md` intent and implementation base requirements.
-  - Closed WPs must remain link-only references, never reopened.
-
-- **Review readiness**:
-  - A reviewer should be able to validate completion using only the WP prompt, supporting artifacts, and code changes.
-  - Include clear done conditions and testing expectations.
-
-## Fail-Fast Rules
-
-- Do not apply ambiguous requests.
-- Do not bypass complexity warnings silently.
-- Do not write outside the resolved change stash.
-- Do not create lane-based subdirectories under `tasks/`.
-- Do not treat generated WPs as final if they fail the quality standard above.
+```text
+$ARGUMENTS
+```
 
 ## Examples
 
 **Simple change on feature branch:**
 ```bash
 spec-kitty agent change preview "replace manual JSON parsing with pydantic models" --json
-spec-kitty agent change apply <request-id> --request-text "replace manual JSON parsing with pydantic models" --json
-spec-kitty agent change reconcile --json
+spec-kitty agent change apply <request-id> \
+  --request-text "replace manual JSON parsing with pydantic models" \
+  --scope-breadth 1 --coupling 0 --dependency-churn 1 --ambiguity 0 --integration-risk 0 \
+  --json
 ```
 
-**Complex change requiring explicit continue:**
+**Complex change with preview:**
 ```bash
-spec-kitty agent change preview "restructure the entire auth flow and replace session model" --json
-# If warningRequired=true and user confirms:
-spec-kitty agent change apply <request-id> --request-text "restructure the entire auth flow and replace session model" --continue --json
+spec-kitty agent change preview "restructure the entire auth flow" --json
+# Agent assesses: scope=3, coupling=2, churn=1, ambiguity=0, risk=1 -> total=7 (HIGH)
+# Recommends /spec-kitty.specify. If user confirms continue:
+spec-kitty agent change apply <request-id> \
+  --request-text "restructure the entire auth flow" \
+  --scope-breadth 3 --coupling 2 --dependency-churn 1 --ambiguity 0 --integration-risk 1 \
+  --continue --json
 ```

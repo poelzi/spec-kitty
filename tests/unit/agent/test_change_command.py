@@ -11,8 +11,9 @@ import json
 from pathlib import Path
 from unittest.mock import patch
 
-from specify_cli.cli.commands.agent.change import app as agent_change_app
 from typer.testing import CliRunner
+
+from specify_cli.cli.commands.agent.change import app as agent_change_app
 
 runner = CliRunner()
 
@@ -220,10 +221,16 @@ class TestPreviewValidation:
 
 
 class TestPreviewComplexityIntegration:
-    """Test that preview includes real complexity scoring (WP03)."""
+    """Test that preview includes complexity scoring fields.
 
-    def test_preview_includes_real_complexity_scores(self) -> None:
-        """Preview should include real (non-zero) complexity scores from classifier."""
+    Note: Since the classifier redesign (AI-assessed scores), preview always
+    returns a default/simple classification (all zeros) because the actual
+    scoring is done by the AI agent on the apply step.  Preview still
+    returns the full structure so the agent can display it.
+    """
+
+    def test_preview_includes_complexity_structure(self) -> None:
+        """Preview should include complexity scoring fields with default values."""
         with (
             patch(
                 "specify_cli.cli.commands.agent.change.locate_project_root"
@@ -248,16 +255,18 @@ class TestPreviewComplexityIntegration:
             assert result.exit_code == 0
             data = json.loads(result.output)
             complexity = data["complexity"]
-            # Should have real scoring fields
+            # Should have all scoring fields
             assert "classification" in complexity
             assert "totalScore" in complexity
             assert "proposedMode" in complexity
             assert "reviewAttention" in complexity
-            # At least one score component should be non-zero for this request
-            assert complexity["totalScore"] >= 0
+            # Preview uses backward-compatible classify_change_request()
+            # which returns all-zeros (simple) - actual scoring is on apply
+            assert complexity["classification"] == "simple"
+            assert complexity["totalScore"] == 0
 
-    def test_preview_high_complexity_shows_warning(self) -> None:
-        """Preview should show warningRequired for high complexity requests."""
+    def test_preview_always_simple_no_warning(self) -> None:
+        """Preview always returns simple classification (scoring is on apply)."""
         with (
             patch(
                 "specify_cli.cli.commands.agent.change.locate_project_root"
@@ -271,23 +280,21 @@ class TestPreviewComplexityIntegration:
             mock_root.return_value = Path("/tmp/fake-repo")
             mock_main.return_value = Path("/tmp/fake-repo")
 
-            # Construct a high-complexity request
+            # Even a complex-sounding request gets simple on preview
             result = runner.invoke(
                 agent_change_app,
                 [
                     "preview",
                     "replace framework Django with FastAPI, migrate from PostgreSQL to MongoDB, "
-                    "update the api contract for all endpoints, modify the deployment pipeline "
-                    "and kubernetes manifests, refactor all modules across the codebase",
+                    "update the api contract for all endpoints",
                     "--json",
                 ],
             )
             assert result.exit_code == 0
             data = json.loads(result.output)
-            if data["complexity"]["classification"] == "high":
-                assert data["warningRequired"] is True
-                assert data["warningMessage"] is not None
-                assert data["complexity"]["recommendSpecify"] is True
+            # Preview no longer does algorithmic scoring - always simple
+            assert data["warningRequired"] is False
+            assert data["complexity"]["classification"] == "simple"
 
     def test_preview_simple_no_warning(self) -> None:
         """Simple requests should not trigger a warning."""
@@ -336,18 +343,24 @@ class TestApplyContinueGate:
                     "apply",
                     "test-id",
                     "--request-text",
-                    "replace framework Django with FastAPI, migrate from PostgreSQL to MongoDB, "
-                    "update the api contract for all endpoints, modify the deployment pipeline "
-                    "and kubernetes manifests, refactor all modules across the codebase",
+                    "replace framework Django with FastAPI",
+                    "--scope-breadth",
+                    "3",
+                    "--coupling",
+                    "2",
+                    "--dependency-churn",
+                    "2",
+                    "--ambiguity",
+                    "1",
+                    "--integration-risk",
+                    "1",
                     "--json",
                 ],
             )
-            # Should either block (exit 1) if high, or pass through if scoring below threshold
-            output = result.output
-            data = json.loads(output)
-            if "error" in data and data["error"] == "high_complexity_blocked":
-                assert result.exit_code == 1
-                assert "complexity threshold" in data["message"]
+            assert result.exit_code == 1
+            data = json.loads(result.output)
+            assert data["error"] == "high_complexity_blocked"
+            assert "complexity threshold" in data["message"]
 
     def test_apply_allows_high_complexity_with_continue(self, tmp_path: Path) -> None:
         """Apply should allow high complexity requests with --continue."""
@@ -380,9 +393,17 @@ class TestApplyContinueGate:
                     "apply",
                     "test-id",
                     "--request-text",
-                    "replace framework Django with FastAPI, migrate from PostgreSQL to MongoDB, "
-                    "update the api contract for all endpoints, modify the deployment pipeline "
-                    "and kubernetes manifests, refactor all modules across the codebase",
+                    "replace framework Django with FastAPI",
+                    "--scope-breadth",
+                    "3",
+                    "--coupling",
+                    "2",
+                    "--dependency-churn",
+                    "2",
+                    "--ambiguity",
+                    "1",
+                    "--integration-risk",
+                    "1",
                     "--continue",
                     "--json",
                 ],
@@ -391,8 +412,10 @@ class TestApplyContinueGate:
             data = json.loads(result.output)
             assert data["requestId"] == "test-id"
             # When --continue is used with high complexity, result should include scoring
-            if "complexity" in data:
-                assert data["complexity"]["reviewAttention"] == "elevated"
+            assert "complexity" in data
+            assert data["complexity"]["reviewAttention"] == "elevated"
+            assert data["complexity"]["classification"] == "high"
+            assert data["complexity"]["totalScore"] == 9
             # Verify generated WP files have elevated review_attention in frontmatter
             if "writtenFiles" in data and data["writtenFiles"]:
                 for fpath in data["writtenFiles"]:

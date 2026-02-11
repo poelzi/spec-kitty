@@ -191,6 +191,23 @@ def apply(
     confirm_unambiguous: Annotated[
         bool, typer.Option("--confirm", help="Confirm request is unambiguous")
     ] = False,
+    scope_breadth: Annotated[
+        int, typer.Option("--scope-breadth", help="AI-assessed scope breadth (0-3)")
+    ] = 0,
+    coupling: Annotated[
+        int, typer.Option("--coupling", help="AI-assessed coupling impact (0-2)")
+    ] = 0,
+    dependency_churn: Annotated[
+        int,
+        typer.Option("--dependency-churn", help="AI-assessed dependency churn (0-2)"),
+    ] = 0,
+    ambiguity: Annotated[
+        int, typer.Option("--ambiguity", help="AI-assessed ambiguity level (0-2)")
+    ] = 0,
+    integration_risk: Annotated[
+        int,
+        typer.Option("--integration-risk", help="AI-assessed integration risk (0-1)"),
+    ] = 0,
     json_output: Annotated[bool, typer.Option("--json", help="Output as JSON")] = False,
 ) -> None:
     """Apply a validated change request and create change work packages.
@@ -199,19 +216,28 @@ def apply(
     package files with dependencies, documentation links, and merge
     coordination jobs.
 
-    When the request exceeds the complexity threshold, the --continue flag
-    is required (FR-010, SC-003). Without it, apply is blocked.
+    The AI agent assesses complexity via --scope-breadth, --coupling,
+    --dependency-churn, --ambiguity, and --integration-risk parameters.
+    When the total exceeds the high-complexity threshold, the --continue
+    flag is required (FR-010, SC-003). Without it, apply is blocked.
 
     Examples:
-        spec-kitty agent change apply "preview-id-123" --request-text "use SQLAlchemy"
-        spec-kitty agent change apply "preview-id-123" --request-text "replace ORM" --continue --json
+        spec-kitty agent change apply "id-123" --request-text "use SQLAlchemy" --scope-breadth 1 --coupling 1
+        spec-kitty agent change apply "id-123" --request-text "replace ORM" --scope-breadth 3 --coupling 2 --continue --json
     """
     repo_root, feature_slug = _resolve_feature(feature)
 
-    # FR-010/FR-011: Score complexity and enforce continue gate
-    from specify_cli.core.change_classifier import classify_change_request as _classify
+    # FR-010/FR-011: Build complexity score from AI-assessed factors
+    from specify_cli.core.change_classifier import classify_from_scores
 
-    score = _classify(request_text, continued_after_warning=continue_after_warning)
+    score = classify_from_scores(
+        scope_breadth=scope_breadth,
+        coupling=coupling,
+        dependency_churn=dependency_churn,
+        ambiguity=ambiguity,
+        integration_risk=integration_risk,
+        continued_after_warning=continue_after_warning,
+    )
     if score.recommend_specify and not continue_after_warning:
         _output_error(
             "high_complexity_blocked",
@@ -380,8 +406,9 @@ def next_doable(
     """Resolve the next doable work package with change-stack priority.
 
     Implements stack-first selection: ready change-stack items take priority
-    over normal backlog items. If change-stack items exist but none are
-    ready, normal progression is blocked and blockers are reported.
+    over normal backlog items. Checks both the main change-stack and the
+    feature-local stash. If change-stack items exist but none are ready,
+    normal progression is blocked and blockers are reported.
 
     Examples:
         spec-kitty agent change next
@@ -389,13 +416,52 @@ def next_doable(
     """
     repo_root, feature_slug = _resolve_feature(feature)
 
-    # Resolve tasks directory
+    from specify_cli.core.change_stack import MAIN_STASH_RELATIVE
+    from specify_cli.core.feature_detection import _get_main_repo_root
+
+    # Check main change-stack first (cross-feature priority)
+    main_repo = _get_main_repo_root(repo_root)
+    main_stash_dir = main_repo / MAIN_STASH_RELATIVE
+
+    if main_stash_dir.exists() and any(main_stash_dir.glob("WP*.md")):
+        main_selection = resolve_next_change_wp(main_stash_dir, "main")
+
+        if (
+            main_selection.selected_source == "change_stack"
+            and main_selection.next_wp_id
+        ):
+            result: dict[str, object] = {
+                "stashKey": "main",
+                "selectedSource": main_selection.selected_source,
+                "nextWorkPackageId": main_selection.next_wp_id,
+                "normalProgressionBlocked": main_selection.normal_progression_blocked,
+                "blockers": main_selection.blockers,
+            }
+            if main_selection.pending_change_wps:
+                result["pendingChangeWPs"] = main_selection.pending_change_wps
+            _output_result(result, json_output)
+            return
+
+        if main_selection.selected_source == "blocked":
+            result = {
+                "stashKey": "main",
+                "selectedSource": main_selection.selected_source,
+                "nextWorkPackageId": None,
+                "normalProgressionBlocked": True,
+                "blockers": main_selection.blockers,
+            }
+            if main_selection.pending_change_wps:
+                result["pendingChangeWPs"] = main_selection.pending_change_wps
+            _output_result(result, json_output)
+            return
+
+    # Check feature-local tasks directory
     tasks_dir = repo_root / "kitty-specs" / feature_slug / "tasks"
 
-    # Run stack-first selection (FR-017)
+    # Run stack-first selection on feature stash (FR-017)
     selection = resolve_next_change_wp(tasks_dir, feature_slug)
 
-    result: dict[str, object] = {
+    result = {
         "stashKey": feature_slug,
         "selectedSource": selection.selected_source,
         "nextWorkPackageId": selection.next_wp_id,

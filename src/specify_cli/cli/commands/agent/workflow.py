@@ -328,11 +328,13 @@ def _find_first_planned_wp(repo_root: Path, feature_slug: str) -> Optional[str]:
     """Find the first WP to implement using stack-first selection (FR-017).
 
     Selection priority:
-    1. If change-stack WPs exist and one is ready (dependencies satisfied),
-       select it by stack_rank then WP ID.
-    2. If change-stack WPs exist but none are ready, return None with
-       blocker information stored for later output.
-    3. If no change-stack WPs exist, select first planned WP (legacy behavior).
+    1. Check main change-stack (kitty-specs/change-stack/main/) for ready
+       change WPs first - these apply across all features.
+    2. Check feature-local tasks dir for change-stack WPs.
+    3. If any change-stack WPs exist (main or feature) but none are ready,
+       return None with blocker information.
+    4. If no change-stack WPs exist anywhere, select first planned WP
+       from the feature backlog (legacy behavior).
 
     Args:
         repo_root: Repository root path
@@ -345,10 +347,32 @@ def _find_first_planned_wp(repo_root: Path, feature_slug: str) -> Optional[str]:
     if tasks_dir is None:
         return None
 
-    # Try stack-first selection via resolve_next_change_wp
     try:
-        from specify_cli.core.change_stack import resolve_next_change_wp
+        from specify_cli.core.change_stack import (
+            MAIN_STASH_RELATIVE,
+            resolve_next_change_wp,
+        )
+        from specify_cli.core.feature_detection import _get_main_repo_root
 
+        # Check main change-stack first (cross-feature priority)
+        main_repo = _get_main_repo_root(repo_root)
+        main_stash_dir = main_repo / MAIN_STASH_RELATIVE
+
+        if main_stash_dir.exists() and any(main_stash_dir.glob("WP*.md")):
+            main_selection = resolve_next_change_wp(main_stash_dir, "main")
+
+            if (
+                main_selection.selected_source == "change_stack"
+                and main_selection.next_wp_id
+            ):
+                _store_stack_selection(main_selection)
+                return main_selection.next_wp_id
+
+            if main_selection.selected_source == "blocked":
+                _store_stack_selection(main_selection)
+                return None
+
+        # Check feature-local tasks dir for change-stack WPs
         selection = resolve_next_change_wp(tasks_dir, feature_slug)
 
         # Store selection for all outcomes so output section can report source
@@ -914,9 +938,7 @@ def implement(
         lines.append("✅ Implementation complete and tested:")
         lines.append("   1. **Commit your implementation files:**")
         lines.append("      git status  # Check what you changed")
-        lines.append(
-            "      git add <your-implementation-files>  # NOT WP status files"
-        )
+        lines.append("      git add <your-implementation-files>  # NOT WP status files")
         lines.append(
             f'      git commit -m "feat({normalized_wp_id}): <brief description>"'
         )

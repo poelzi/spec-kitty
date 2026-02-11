@@ -46,9 +46,17 @@ spec-kitty change "add caching layer" --json output.json
 # Step 1: Preview - validate and classify before writing files
 spec-kitty agent change preview "$ARGUMENTS" --json
 
-# Step 2: Apply - create WPs from validated request
+# Step 2: Apply - create WPs from validated request (with AI-assessed scores)
 # --request-text is REQUIRED
-spec-kitty agent change apply <request-id> --request-text "$ARGUMENTS" --json
+# Complexity scores are REQUIRED (assessed by you, the agent)
+spec-kitty agent change apply <request-id> \
+  --request-text "$ARGUMENTS" \
+  --scope-breadth <0-3> \
+  --coupling <0-2> \
+  --dependency-churn <0-2> \
+  --ambiguity <0-2> \
+  --integration-risk <0-1> \
+  --json
 
 # Stack-first selection - get next doable WP with change priority
 spec-kitty agent change next --json
@@ -61,21 +69,42 @@ spec-kitty agent change reconcile --json
 
 1. **Preview and classify first**:
    - Run `spec-kitty agent change preview "$ARGUMENTS" --json`.
-   - Parse and retain: `requestId`, `stashScope`, `stashPath`, `validationState`, `complexity`, `proposedMode`, `warningRequired`, `warningMessage`, `requiresClarification`.
+   - Parse and retain: `requestId`, `stashScope`, `stashPath`, `validationState`, `requiresClarification`.
 
 2. **Resolve ambiguity before apply**:
    - If `requiresClarification=true` or `validationState` is ambiguous, ask focused clarifying questions.
    - Re-run preview until the request is unambiguous.
    - Do not apply while ambiguity remains.
 
-3. **Enforce complexity gate**:
-   - If `warningRequired=true`, recommend `/spec-kitty.specify` for full planning.
-   - Only proceed with apply when the user explicitly chooses to continue.
-   - When continuing despite the warning, include `--continue` on apply.
+3. **Assess complexity (YOU do this)**:
+   Before calling apply, YOU must assess the change request across 5 dimensions.
+   Read the feature's spec.md, plan.md, and existing tasks to understand the scope,
+   then score each factor:
+
+   | Factor | Range | Guidance |
+   |--------|-------|----------|
+   | `--scope-breadth` | 0-3 | 0=single file/function, 1=2-3 targets, 2=multiple modules, 3=cross-cutting/architectural |
+   | `--coupling` | 0-2 | 0=isolated, 1=shared interfaces/imports, 2=API contracts/schema/breaking changes |
+   | `--dependency-churn` | 0-2 | 0=no dep changes, 1=add/update packages, 2=replace frameworks/major versions |
+   | `--ambiguity` | 0-2 | 0=clear and specific, 1=hedging language, 2=vague/broad qualitative goals |
+   | `--integration-risk` | 0-1 | 0=localized, 1=touches CI/CD/deploy/infra/auth/external APIs |
+
+   **Thresholds** (computed from total score):
+   - 0-3: **simple** -> single change WP
+   - 4-6: **complex** -> adaptive packaging (orchestration or targeted multi-WP)
+   - 7-10: **high** -> recommend `/spec-kitty.specify`, require explicit `--continue`
 
 4. **Apply with full arguments**:
    - Run:
-     `spec-kitty agent change apply <request-id> --request-text "$ARGUMENTS" [--continue] --json`
+     ```bash
+     spec-kitty agent change apply <request-id> \
+       --request-text "$ARGUMENTS" \
+       --scope-breadth <N> --coupling <N> --dependency-churn <N> \
+       --ambiguity <N> --integration-risk <N> \
+       [--continue] --json
+     ```
+   - If total score >= 7 (high), you MUST recommend `/spec-kitty.specify` first.
+     Only add `--continue` when the user explicitly agrees to proceed.
    - Parse and retain: `createdWorkPackages`, `writtenFiles`, `closedReferenceLinks`, `mergeCoordinationJobs`, `consistency`, `rejectedEdges`, `mode`.
 
 5. **Reconcile after apply**:
@@ -101,7 +130,7 @@ spec-kitty agent change reconcile --json
    - Report:
      - `requestId`
      - stash scope/path
-     - complexity mode and warning status
+     - complexity assessment (your scores and the resulting classification)
      - created WP IDs and prompt paths
      - dependency and reconciliation status
      - merge coordination jobs (if any)
@@ -144,13 +173,20 @@ When a change request creates new WPs, apply these standards before considering 
 **Simple change on feature branch:**
 ```bash
 spec-kitty agent change preview "replace manual JSON parsing with pydantic models" --json
-spec-kitty agent change apply <request-id> --request-text "replace manual JSON parsing with pydantic models" --json
+spec-kitty agent change apply <request-id> \
+  --request-text "replace manual JSON parsing with pydantic models" \
+  --scope-breadth 1 --coupling 0 --dependency-churn 1 --ambiguity 0 --integration-risk 0 \
+  --json
 spec-kitty agent change reconcile --json
 ```
 
 **Complex change requiring explicit continue:**
 ```bash
 spec-kitty agent change preview "restructure the entire auth flow and replace session model" --json
-# If warningRequired=true and user confirms:
-spec-kitty agent change apply <request-id> --request-text "restructure the entire auth flow and replace session model" --continue --json
+# Total score: scope=3 + coupling=2 + churn=2 + ambiguity=1 + risk=1 = 9 (HIGH)
+# Recommend /spec-kitty.specify. If user says continue:
+spec-kitty agent change apply <request-id> \
+  --request-text "restructure the entire auth flow and replace session model" \
+  --scope-breadth 3 --coupling 2 --dependency-churn 2 --ambiguity 1 --integration-risk 1 \
+  --continue --json
 ```

@@ -15,9 +15,15 @@ from specify_cli.cli.helpers import (
     get_project_root_or_exit,
     show_banner,
 )
-from specify_cli.core.feature_detection import (
-    FeatureDetectionError,
-    detect_feature_slug,
+from specify_cli.core.change_classifier import classify_change_request
+from specify_cli.core.change_stack import (
+    ChangeStackError,
+    ValidationState,
+    generate_change_work_packages,
+    reconcile_change_stack,
+    synthesize_change_plan,
+    validate_change_request,
+    write_change_work_packages,
 )
 from specify_cli.tasks_support import TaskCliError, find_repo_root
 
@@ -69,7 +75,6 @@ def change(
 
     tracker = StepTracker("Change Request")
     tracker.add("project", "Locate project root")
-    tracker.add("feature", "Resolve feature context")
     tracker.add("validate", "Validate change request")
     tracker.add("assess", "Assess complexity")
     tracker.add("plan", "Plan work packages")
@@ -79,20 +84,7 @@ def change(
     tracker.start("project")
     tracker.complete("project", str(project_root))
 
-    # Step 2: Resolve feature context
-    tracker.start("feature")
-    try:
-        feature_slug = (
-            feature or detect_feature_slug(repo_root, cwd=Path.cwd())
-        ).strip()
-    except (FeatureDetectionError, Exception) as exc:
-        tracker.error("feature", str(exc))
-        console.print(tracker.render())
-        console.print(f"[red]Error:[/red] {exc}")
-        raise typer.Exit(1)
-    tracker.complete("feature", feature_slug)
-
-    # Step 3-5: Stubbed for WP01 - actual implementation in later WPs
+    # Step 2: Validate change request (stash routing + ambiguity)
     tracker.start("validate")
     if not request:
         tracker.error("validate", "No change request provided")
@@ -103,27 +95,74 @@ def change(
         console.print()
         console.print("[dim]Interactive mode not yet implemented.[/dim]")
         raise typer.Exit(1)
-    tracker.complete("validate", "Request accepted")
 
+    try:
+        change_req = validate_change_request(
+            request_text=request,
+            repo_root=repo_root,
+            feature=feature,
+        )
+    except ChangeStackError as exc:
+        tracker.error("validate", str(exc))
+        console.print(tracker.render())
+        console.print(f"\n[red]Error:[/red] {exc}")
+        raise typer.Exit(1)
+
+    if change_req.validation_state == ValidationState.AMBIGUOUS:
+        tracker.error("validate", "Ambiguous request")
+        console.print(tracker.render())
+        console.print(
+            f"\n[yellow]Clarification needed:[/yellow] {change_req.ambiguity.clarification_prompt}"
+        )
+        if json_output:
+            Path(json_output).write_text(
+                json_mod.dumps(
+                    {
+                        "mode": "preview",
+                        "status": "ambiguous",
+                        "requestId": change_req.request_id,
+                        "clarificationPrompt": change_req.ambiguity.clarification_prompt,
+                    },
+                    indent=2,
+                ),
+                encoding="utf-8",
+            )
+        raise typer.Exit(1)
+
+    tracker.complete("validate", f"Routed to {change_req.stash.scope.value} stash")
+
+    # Step 3: Assess complexity (default scores for human CLI; agents use agent change apply)
     tracker.start("assess")
-    tracker.complete("assess", "Stubbed (WP03)")
+    score = change_req.complexity_score or classify_change_request(request)
+    classification = score.classification.value
+    tracker.complete("assess", f"{classification} (score {score.total_score}/10)")
 
     if preview:
         console.print(tracker.render())
         console.print()
+        console.print(f"[bold]Preview:[/bold]")
+        console.print(f"  Request ID: {change_req.request_id}")
         console.print(
-            "[yellow]Preview mode:[/yellow] Would assess complexity and plan work packages."
+            f"  Stash: {change_req.stash.stash_key} ({change_req.stash.scope.value})"
         )
-        console.print(f"  Feature: {feature_slug}")
-        console.print(f"  Request: {request}")
-        console.print(
-            "[dim]Full preview (classification, dependency analysis) will be added in WP03.[/dim]"
-        )
+        console.print(f"  Stash path: {change_req.stash.stash_path}")
+        console.print(f"  Complexity: {classification} ({score.total_score}/10)")
+        console.print(f"  Proposed mode: {score.proposed_mode.value}")
+        if score.recommend_specify:
+            console.print()
+            console.print(
+                "[yellow]Warning:[/yellow] This request exceeds the complexity threshold."
+            )
+            console.print(
+                "  Consider using [bold]/spec-kitty.specify[/bold] for full planning."
+            )
         result = {
             "mode": "preview",
-            "feature": feature_slug,
-            "request": request,
-            "status": "stubbed",
+            "requestId": change_req.request_id,
+            "stashKey": change_req.stash.stash_key,
+            "stashScope": change_req.stash.scope.value,
+            "complexity": score.to_dict(),
+            "status": "previewed",
         }
         if json_output:
             Path(json_output).write_text(
@@ -131,22 +170,66 @@ def change(
             )
         return
 
+    # Step 4: Synthesize and create work packages
     tracker.start("plan")
-    tracker.complete("plan", "Stubbed (WP04)")
+
+    if score.recommend_specify:
+        tracker.error(
+            "plan",
+            "High complexity - use /spec-kitty.specify or agent change apply --continue",
+        )
+        console.print(tracker.render())
+        console.print()
+        console.print(
+            "[yellow]Warning:[/yellow] This request exceeds the complexity threshold."
+        )
+        console.print("  Use [bold]/spec-kitty.specify[/bold] for full planning, or")
+        console.print(
+            "  use [bold]spec-kitty agent change apply --continue[/bold] to proceed anyway."
+        )
+        if json_output:
+            Path(json_output).write_text(
+                json_mod.dumps(
+                    {
+                        "mode": "apply",
+                        "status": "blocked_high_complexity",
+                        "requestId": change_req.request_id,
+                        "complexity": score.to_dict(),
+                    },
+                    indent=2,
+                ),
+                encoding="utf-8",
+            )
+        raise typer.Exit(1)
+
+    plan = synthesize_change_plan(change_req)
+    tasks_dir = change_req.stash.stash_path
+    wps = generate_change_work_packages(change_req, plan, tasks_dir)
+    written_paths = write_change_work_packages(wps, tasks_dir)
+
+    # Reconcile
+    feature_dir = change_req.stash.stash_path.parent
+    consistency = reconcile_change_stack(tasks_dir, feature_dir, wps)
+
+    tracker.complete("plan", f"Created {len(wps)} WP(s)")
 
     console.print(tracker.render())
     console.print()
-    console.print("[yellow]Note:[/yellow] Change command surface registered.")
-    console.print(
-        "[dim]Full implementation (classification, synthesis, dependency linking) will be added in subsequent work packages (WP02-WP08).[/dim]"
-    )
+    for wp in wps:
+        console.print(f"  Created: {wp.work_package_id} - {wp.title}")
+    if consistency.issues:
+        console.print()
+        for issue in consistency.issues:
+            console.print(f"  [yellow]Warning:[/yellow] {issue}")
 
     result = {
         "mode": "apply",
-        "feature": feature_slug,
-        "request": request,
-        "status": "stubbed",
-        "createdWorkPackages": [],
+        "status": "applied",
+        "requestId": change_req.request_id,
+        "stashKey": change_req.stash.stash_key,
+        "createdWorkPackages": [wp.to_dict() for wp in wps],
+        "writtenFiles": [str(p) for p in written_paths],
+        "complexity": score.to_dict(),
     }
     if json_output:
         Path(json_output).write_text(json_mod.dumps(result, indent=2), encoding="utf-8")

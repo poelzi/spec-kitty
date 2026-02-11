@@ -281,6 +281,119 @@ class TestBlockedStackOutput:
 # ============================================================================
 
 
+# ============================================================================
+# Cross-stash selection: main change-stack found from feature context (Fix 3)
+# ============================================================================
+
+
+class TestCrossStashSelection:
+    """Verify that main change-stack WPs are found when working on a feature.
+
+    This tests Fix 3: _find_first_planned_wp() must check both
+    kitty-specs/change-stack/main/ AND the feature-local tasks dir.
+    """
+
+    def test_main_stash_wp_selected_from_feature_context(
+        self, workflow_repo: Path
+    ) -> None:
+        """Working on feature, main-stash has planned change WP -> selects it."""
+        feature_slug = "001-test-feature"
+        feature_dir = workflow_repo / "kitty-specs" / feature_slug
+        tasks_dir = feature_dir / "tasks"
+
+        # Feature has a normal planned WP
+        _write_tasks_md(feature_dir, "WP01")
+        _write_wp_file(tasks_dir, "WP01", lane="planned")
+
+        # Main stash has a ready change WP
+        main_stash = workflow_repo / "kitty-specs" / "change-stack" / "main"
+        _write_wp_file(
+            main_stash, "WP01", lane="planned", change_stack=True, stack_rank=1
+        )
+
+        result = runner.invoke(
+            workflow.app,
+            ["implement", "--feature", feature_slug, "--agent", "test-agent"],
+        )
+
+        assert result.exit_code == 0
+        # Should select the main-stash change WP, not the feature WP01
+        assert "Selected from change stack" in result.output
+
+    def test_main_stash_active_change_wp_blocks_feature(
+        self, workflow_repo: Path
+    ) -> None:
+        """Main-stash has an active (doing) change WP -> blocks progression."""
+        feature_slug = "001-test-feature"
+        feature_dir = workflow_repo / "kitty-specs" / feature_slug
+        tasks_dir = feature_dir / "tasks"
+
+        # Feature has a normal planned WP
+        _write_tasks_md(feature_dir, "WP01")
+        _write_wp_file(tasks_dir, "WP01", lane="planned")
+
+        # Main stash has only an in-progress change WP (none ready)
+        main_stash = workflow_repo / "kitty-specs" / "change-stack" / "main"
+        _write_wp_file(
+            main_stash, "WP01", lane="doing", change_stack=True, stack_rank=1
+        )
+
+        result = runner.invoke(
+            workflow.app,
+            ["implement", "--feature", feature_slug, "--agent", "test-agent"],
+        )
+
+        assert result.exit_code == 1
+        assert "Change stack has pending work packages" in result.output
+
+    def test_empty_main_stash_falls_through_to_feature(
+        self, workflow_repo: Path
+    ) -> None:
+        """Empty main stash -> feature-local WPs selected (regression test)."""
+        feature_slug = "001-test-feature"
+        feature_dir = workflow_repo / "kitty-specs" / feature_slug
+        tasks_dir = feature_dir / "tasks"
+
+        # Feature has a normal planned WP, no main stash at all
+        _write_tasks_md(feature_dir, "WP01")
+        _write_wp_file(tasks_dir, "WP01", lane="planned")
+
+        result = runner.invoke(
+            workflow.app,
+            ["implement", "--feature", feature_slug, "--agent", "test-agent"],
+        )
+
+        assert result.exit_code == 0
+        assert "Selected from normal backlog" in result.output
+
+    def test_main_stash_all_done_falls_through(self, workflow_repo: Path) -> None:
+        """Main stash has only done change WPs -> falls through to feature."""
+        feature_slug = "001-test-feature"
+        feature_dir = workflow_repo / "kitty-specs" / feature_slug
+        tasks_dir = feature_dir / "tasks"
+
+        _write_tasks_md(feature_dir, "WP01")
+        _write_wp_file(tasks_dir, "WP01", lane="planned")
+
+        # Main stash has only completed change WPs
+        main_stash = workflow_repo / "kitty-specs" / "change-stack" / "main"
+        _write_wp_file(main_stash, "WP01", lane="done", change_stack=True, stack_rank=1)
+
+        result = runner.invoke(
+            workflow.app,
+            ["implement", "--feature", feature_slug, "--agent", "test-agent"],
+        )
+
+        assert result.exit_code == 0
+        # Should fall through to feature normal backlog
+        assert "Selected from normal backlog" in result.output
+
+
+# ============================================================================
+# Explicit WP ID → no selection source (not auto-detected)
+# ============================================================================
+
+
 class TestExplicitWpNoSelectionSource:
     """Verify no selection source message when WP ID is given explicitly."""
 

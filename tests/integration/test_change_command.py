@@ -353,9 +353,42 @@ class TestTopLevelChangeCommand:
         _app.command()(change)
         return _app
 
-    def test_change_command_completes_without_markup_error(self):
+    @staticmethod
+    def _mock_change_req(tmp_path):
+        """Build a mock ChangeRequest for testing."""
+        from specify_cli.core.change_classifier import classify_change_request
+        from specify_cli.core.change_stack import (
+            AmbiguityResult,
+            BranchStash,
+            ChangeRequest,
+            ClosedReferenceCheck,
+            StashScope,
+            ValidationState,
+        )
+
+        stash_path = tmp_path / "kitty-specs" / "029-test" / "tasks"
+        stash_path.mkdir(parents=True, exist_ok=True)
+        return ChangeRequest(
+            request_id="test-id",
+            raw_text="use SQLAlchemy instead",
+            submitted_branch="029-test",
+            stash=BranchStash(
+                scope=StashScope.FEATURE,
+                stash_key="029-test",
+                stash_path=stash_path,
+            ),
+            validation_state=ValidationState.VALID,
+            ambiguity=AmbiguityResult(is_ambiguous=False),
+            closed_references=ClosedReferenceCheck(
+                has_closed_references=False,
+            ),
+            complexity_score=classify_change_request(""),
+        )
+
+    def test_change_command_completes_without_markup_error(self, tmp_path):
         """Top-level change command should not crash with Rich MarkupError."""
         app = self._make_app()
+        mock_req = self._mock_change_req(tmp_path)
         with (
             patch("specify_cli.cli.commands.change.find_repo_root") as mock_root,
             patch(
@@ -363,20 +396,43 @@ class TestTopLevelChangeCommand:
             ) as mock_proj,
             patch("specify_cli.cli.commands.change.check_version_compatibility"),
             patch(
-                "specify_cli.cli.commands.change.detect_feature_slug",
-                return_value="029-test",
+                "specify_cli.cli.commands.change.validate_change_request",
+                return_value=mock_req,
             ),
+            patch(
+                "specify_cli.cli.commands.change.synthesize_change_plan"
+            ) as mock_plan,
+            patch(
+                "specify_cli.cli.commands.change.generate_change_work_packages",
+                return_value=[],
+            ),
+            patch(
+                "specify_cli.cli.commands.change.write_change_work_packages",
+                return_value=[],
+            ),
+            patch(
+                "specify_cli.cli.commands.change.reconcile_change_stack"
+            ) as mock_recon,
         ):
-            mock_root.return_value = Path("/tmp/fake-repo")
-            mock_proj.return_value = Path("/tmp/fake-repo")
+            from specify_cli.core.change_stack import ConsistencyReport
+
+            mock_root.return_value = tmp_path
+            mock_proj.return_value = tmp_path
+            mock_recon.return_value = ConsistencyReport(
+                updated_tasks_doc=False,
+                dependency_validation_passed=True,
+                broken_links_fixed=0,
+                issues=[],
+            )
 
             result = runner.invoke(app, ["use SQLAlchemy instead"])
+            # Should complete without MarkupError crash
             assert result.exit_code == 0
-            assert "Change command surface registered" in result.output
 
-    def test_change_preview_flag_alters_behavior(self):
+    def test_change_preview_flag_alters_behavior(self, tmp_path):
         """--preview flag should show preview output instead of apply output."""
         app = self._make_app()
+        mock_req = self._mock_change_req(tmp_path)
         with (
             patch("specify_cli.cli.commands.change.find_repo_root") as mock_root,
             patch(
@@ -384,22 +440,22 @@ class TestTopLevelChangeCommand:
             ) as mock_proj,
             patch("specify_cli.cli.commands.change.check_version_compatibility"),
             patch(
-                "specify_cli.cli.commands.change.detect_feature_slug",
-                return_value="029-test",
+                "specify_cli.cli.commands.change.validate_change_request",
+                return_value=mock_req,
             ),
         ):
-            mock_root.return_value = Path("/tmp/fake-repo")
-            mock_proj.return_value = Path("/tmp/fake-repo")
+            mock_root.return_value = tmp_path
+            mock_proj.return_value = tmp_path
 
             result = runner.invoke(app, ["refactor auth", "--preview"])
             assert result.exit_code == 0
-            assert "Preview mode" in result.output
-            # Should NOT contain the apply-mode message
-            assert "Change command surface registered" not in result.output
+            # Preview output includes request ID and stash info
+            assert "Preview" in result.output or "preview" in result.output.lower()
 
     def test_change_json_output_writes_file(self, tmp_path):
         """--json flag should write structured JSON to the provided path."""
         app = self._make_app()
+        mock_req = self._mock_change_req(tmp_path)
         json_path = tmp_path / "output.json"
         with (
             patch("specify_cli.cli.commands.change.find_repo_root") as mock_root,
@@ -408,24 +464,47 @@ class TestTopLevelChangeCommand:
             ) as mock_proj,
             patch("specify_cli.cli.commands.change.check_version_compatibility"),
             patch(
-                "specify_cli.cli.commands.change.detect_feature_slug",
-                return_value="029-test",
+                "specify_cli.cli.commands.change.validate_change_request",
+                return_value=mock_req,
             ),
+            patch(
+                "specify_cli.cli.commands.change.synthesize_change_plan"
+            ) as mock_plan,
+            patch(
+                "specify_cli.cli.commands.change.generate_change_work_packages",
+                return_value=[],
+            ),
+            patch(
+                "specify_cli.cli.commands.change.write_change_work_packages",
+                return_value=[],
+            ),
+            patch(
+                "specify_cli.cli.commands.change.reconcile_change_stack"
+            ) as mock_recon,
         ):
-            mock_root.return_value = Path("/tmp/fake-repo")
-            mock_proj.return_value = Path("/tmp/fake-repo")
+            from specify_cli.core.change_stack import ConsistencyReport
+
+            mock_root.return_value = tmp_path
+            mock_proj.return_value = tmp_path
+            mock_recon.return_value = ConsistencyReport(
+                updated_tasks_doc=False,
+                dependency_validation_passed=True,
+                broken_links_fixed=0,
+                issues=[],
+            )
 
             result = runner.invoke(app, ["add caching", "--json", str(json_path)])
             assert result.exit_code == 0
             assert json_path.exists()
             data = json.loads(json_path.read_text())
             assert data["mode"] == "apply"
-            assert data["feature"] == "029-test"
+            assert data["status"] == "applied"
             assert "createdWorkPackages" in data
 
     def test_change_preview_json_output(self, tmp_path):
         """--preview --json should write preview JSON."""
         app = self._make_app()
+        mock_req = self._mock_change_req(tmp_path)
         json_path = tmp_path / "preview.json"
         with (
             patch("specify_cli.cli.commands.change.find_repo_root") as mock_root,
@@ -434,12 +513,12 @@ class TestTopLevelChangeCommand:
             ) as mock_proj,
             patch("specify_cli.cli.commands.change.check_version_compatibility"),
             patch(
-                "specify_cli.cli.commands.change.detect_feature_slug",
-                return_value="029-test",
+                "specify_cli.cli.commands.change.validate_change_request",
+                return_value=mock_req,
             ),
         ):
-            mock_root.return_value = Path("/tmp/fake-repo")
-            mock_proj.return_value = Path("/tmp/fake-repo")
+            mock_root.return_value = tmp_path
+            mock_proj.return_value = tmp_path
 
             result = runner.invoke(
                 app, ["refactor auth", "--preview", "--json", str(json_path)]
@@ -448,7 +527,6 @@ class TestTopLevelChangeCommand:
             assert json_path.exists()
             data = json.loads(json_path.read_text())
             assert data["mode"] == "preview"
-            assert data["request"] == "refactor auth"
 
 
 class TestInitFlowIncludesChange:
