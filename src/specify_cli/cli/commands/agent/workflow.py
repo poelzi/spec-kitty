@@ -866,9 +866,8 @@ def implement(
         lines.append("")
 
         if has_feedback:
-            lines.append(
-                "⚠️  This work package has review feedback. Check the '## Review Feedback' section below."
-            )
+            lines.append("⚠️  This work package has review feedback. Check the '## Review Feedback' section below.")
+            lines.append("   When you re-submit to for_review, move-task marks addressed checklist items with done comments.")
             lines.append("")
 
         # Research mission: Show deliverables path prominently
@@ -1485,11 +1484,9 @@ def review(
             f'  spec-kitty agent tasks move-task {normalized_wp_id} --to done --note "Review passed"'
         )
         lines.append("")
-        lines.append("⚠️  Changes requested:")
-        lines.append("  1. Add feedback to the WP file's '## Review Feedback' section")
-        lines.append(
-            f'  2. spec-kitty agent tasks move-task {normalized_wp_id} --to planned --note "Changes requested"'
-        )
+        lines.append(f"⚠️  Changes requested:")
+        lines.append(f"  1. Write feedback to a file (use the unique temp path shown below)")
+        lines.append(f"  2. spec-kitty agent tasks move-task {normalized_wp_id} --to planned --review-feedback-file <feedback-file>")
         lines.append("=" * 80)
         lines.append("")
         lines.append("📍 WORKING DIRECTORY:")

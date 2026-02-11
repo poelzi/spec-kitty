@@ -177,7 +177,7 @@ def _find_feature_slug(explicit_feature: str | None = None) -> str:
         raise typer.Exit(1)
 
 
-def _output_result(json_mode: bool, data: dict, success_message: str = None):
+def _output_result(json_mode: bool, data: dict, success_message: Optional[str] = None):
     """Output result in JSON or human-readable format.
 
     Args:
@@ -202,6 +202,119 @@ def _output_error(json_mode: bool, error_message: str):
         print(json.dumps({"error": error_message}))
     else:
         console.print(f"[red]Error:[/red] {error_message}")
+
+
+def _detect_reviewer_name() -> str:
+    """Detect reviewer name from git config, with safe fallback."""
+    try:
+        result = subprocess.run(
+            ["git", "config", "user.name"],
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+        return result.stdout.strip() or "unknown"
+    except (subprocess.CalledProcessError, FileNotFoundError):
+        return "unknown"
+
+
+def _resolve_review_feedback_path(path: Path) -> Path:
+    """Resolve and validate a review feedback file path."""
+    resolved = path.expanduser()
+    if not resolved.is_absolute():
+        resolved = (Path.cwd() / resolved).resolve()
+    else:
+        resolved = resolved.resolve()
+
+    if not resolved.exists():
+        raise FileNotFoundError(f"Review feedback file not found: {resolved}")
+    if not resolved.is_file():
+        raise IsADirectoryError(f"Review feedback path is not a file: {resolved}")
+    return resolved
+
+
+def _find_review_feedback_section_bounds(body: str) -> tuple[int, int, int] | None:
+    """Return (section_start, content_start, section_end) for Review Feedback."""
+    section_pattern = re.compile(r"^##\s+Review Feedback\s*$", flags=re.MULTILINE)
+    section_match = section_pattern.search(body)
+
+    if section_match is None:
+        return None
+
+    content_start = section_match.end()
+    next_section_match = re.search(r"^##\s+", body[content_start:], flags=re.MULTILINE)
+    if next_section_match is None:
+        section_end = len(body)
+    else:
+        section_end = content_start + next_section_match.start()
+
+    return section_match.start(), content_start, section_end
+
+
+def _upsert_review_feedback_section(body: str, feedback_block: str) -> str:
+    """Insert or append an entry to the Review Feedback section in a WP body."""
+    bounds = _find_review_feedback_section_bounds(body)
+
+    normalized_block = feedback_block.strip()
+    replacement = f"## Review Feedback\n\n{normalized_block}\n\n"
+
+    if bounds is None:
+        base = body.rstrip("\n")
+        if base:
+            return f"{base}\n\n{replacement}"
+        return replacement
+
+    section_start, content_start, section_end = bounds
+    existing_section = body[content_start:section_end].strip()
+
+    if normalized_block in existing_section:
+        combined_section = existing_section
+    elif existing_section:
+        combined_section = f"{existing_section}\n\n---\n\n{normalized_block}"
+    else:
+        combined_section = normalized_block
+
+    updated_section = f"## Review Feedback\n\n{combined_section}\n\n"
+    return body[:section_start] + updated_section + body[section_end:]
+
+
+def _mark_review_feedback_done_comments(body: str, actor: str, timestamp: str) -> str:
+    """Mark unresolved review checklist items as done with a comment."""
+    bounds = _find_review_feedback_section_bounds(body)
+    if bounds is None:
+        return body
+
+    section_start, content_start, section_end = bounds
+    section_content = body[content_start:section_end]
+    lines = section_content.splitlines()
+
+    done_comment = f"<!-- done: addressed by {actor} at {timestamp} -->"
+    checkbox_pattern = re.compile(r"^(\s*[-*]\s*)\[\s*\]\s+(.*)$")
+
+    updated_lines: list[str] = []
+    marked_count = 0
+    for line in lines:
+        match = checkbox_pattern.match(line)
+        if match:
+            item_text = match.group(2).rstrip()
+            if done_comment not in item_text:
+                item_text = f"{item_text} {done_comment}"
+            updated_lines.append(f"{match.group(1)}[x] {item_text}")
+            marked_count += 1
+            continue
+        updated_lines.append(line)
+
+    if marked_count == 0:
+        summary_comment = f"- [x] DONE: Feedback addressed by {actor}. {done_comment}"
+        if summary_comment not in section_content:
+            if updated_lines and updated_lines[-1].strip():
+                updated_lines.append("")
+            updated_lines.append(summary_comment)
+
+    updated_content = "\n".join(updated_lines).strip()
+    updated_section = f"## Review Feedback\n\n{updated_content}\n\n"
+
+    return body[:section_start] + updated_section + body[section_end:]
 
 
 def _check_unchecked_subtasks(
@@ -588,7 +701,13 @@ def move_task(
     assignee: Annotated[Optional[str], typer.Option("--assignee", help="Assignee name (sets assignee when moving to doing)")] = None,
     shell_pid: Annotated[Optional[str], typer.Option("--shell-pid", help="Shell PID")] = None,
     note: Annotated[Optional[str], typer.Option("--note", help="History note")] = None,
-    review_feedback_file: Annotated[Optional[Path], typer.Option("--review-feedback-file", help="Path to review feedback file (required when moving to planned from review)")] = None,
+    review_feedback_file: Annotated[
+        Optional[Path],
+        typer.Option(
+            "--review-feedback-file",
+            help="Path to review feedback file (required when moving to planned from review)",
+        ),
+    ] = None,
     reviewer: Annotated[Optional[str], typer.Option("--reviewer", help="Reviewer name (auto-detected from git if omitted)")] = None,
     force: Annotated[bool, typer.Option("--force", help="Force move even with unchecked subtasks or missing feedback")] = False,
     auto_commit: Annotated[bool, typer.Option("--auto-commit/--no-auto-commit", help="Automatically commit WP file changes to target branch")] = True,
@@ -638,6 +757,15 @@ def move_task(
         # Load work package first (needed for current_lane check)
         wp = locate_work_package(repo_root, feature_slug, task_id)
         old_lane = wp.current_lane
+        current_review_status = extract_scalar(wp.frontmatter, "review_status") or ""
+
+        resolved_review_feedback_file: Optional[Path] = None
+        if review_feedback_file is not None:
+            try:
+                resolved_review_feedback_file = _resolve_review_feedback_path(review_feedback_file)
+            except (FileNotFoundError, IsADirectoryError) as exc:
+                _output_error(json_output, str(exc))
+                raise typer.Exit(1)
 
         # AGENT OWNERSHIP CHECK: Warn if agent doesn't match WP's current agent
         # This helps prevent agents from accidentally modifying WPs they don't own
@@ -656,7 +784,7 @@ def move_task(
             raise typer.Exit(1)
 
         # Validate review feedback when moving to planned (likely from review)
-        if target_lane == "planned" and old_lane == "for_review" and not review_feedback_file and not force:
+        if target_lane == "planned" and old_lane == "for_review" and not resolved_review_feedback_file and not force:
             error_msg = f"❌ Moving {task_id} from 'for_review' to 'planned' requires review feedback.\n\n"
             error_msg += "Please provide feedback:\n"
             error_msg += "  1. Create feedback file: echo '**Issue**: Description' > feedback.md\n"
@@ -709,40 +837,28 @@ def move_task(
 
         # Handle review feedback insertion if moving to planned with feedback
         updated_body = wp.body
-        if review_feedback_file and review_feedback_file.exists():
+        if resolved_review_feedback_file:
             # Read feedback content
-            feedback_content = review_feedback_file.read_text(encoding="utf-8").strip()
+            feedback_content = resolved_review_feedback_file.read_text(encoding="utf-8").strip()
 
             # Auto-detect reviewer if not provided
             if not reviewer:
-                try:
-                    import subprocess
-                    result = subprocess.run(
-                        ["git", "config", "user.name"],
-                        capture_output=True,
-                        text=True,
-                        check=True
-                    )
-                    reviewer = result.stdout.strip() or "unknown"
-                except (subprocess.CalledProcessError, FileNotFoundError):
-                    reviewer = "unknown"
+                reviewer = _detect_reviewer_name()
 
-            # Insert feedback into "## Review Feedback" section
-            # Find the section and replace its content
-            review_section_start = updated_body.find("## Review Feedback")
-            if review_section_start != -1:
-                # Find the next section (starts with ##) or end of document
-                next_section_start = updated_body.find("\n##", review_section_start + 18)
+            if not feedback_content:
+                feedback_content = "_(No feedback provided in review file.)_"
 
-                if next_section_start == -1:
-                    # No next section, replace to end
-                    before = updated_body[:review_section_start]
-                    updated_body = before + f"## Review Feedback\n\n**Reviewed by**: {reviewer}\n**Status**: ❌ Changes Requested\n**Date**: {datetime.now(timezone.utc).strftime('%Y-%m-%d')}\n\n{feedback_content}\n\n"
-                else:
-                    # Replace content between this section and next
-                    before = updated_body[:review_section_start]
-                    after = updated_body[next_section_start:]
-                    updated_body = before + f"## Review Feedback\n\n**Reviewed by**: {reviewer}\n**Status**: ❌ Changes Requested\n**Date**: {datetime.now(timezone.utc).strftime('%Y-%m-%d')}\n\n{feedback_content}\n\n" + after
+            feedback_block = "\n".join(
+                [
+                    f"**Reviewed by**: {reviewer}",
+                    "**Status**: ❌ Changes Requested",
+                    f"**Date**: {datetime.now(timezone.utc).strftime('%Y-%m-%d')}",
+                    "",
+                    feedback_content,
+                ]
+            )
+
+            updated_body = _upsert_review_feedback_section(updated_body, feedback_block)
 
             # Update frontmatter for review status
             updated_front = set_scalar(updated_front, "review_status", "has_feedback")
@@ -752,23 +868,21 @@ def move_task(
         if target_lane == "done" and not extract_scalar(updated_front, "reviewed_by"):
             # Auto-detect reviewer if not provided
             if not reviewer:
-                try:
-                    import subprocess
-                    result = subprocess.run(
-                        ["git", "config", "user.name"],
-                        capture_output=True,
-                        text=True,
-                        check=True
-                    )
-                    reviewer = result.stdout.strip() or "unknown"
-                except (subprocess.CalledProcessError, FileNotFoundError):
-                    reviewer = "unknown"
+                reviewer = _detect_reviewer_name()
 
             updated_front = set_scalar(updated_front, "reviewed_by", reviewer)
             updated_front = set_scalar(updated_front, "review_status", "approved")
 
-        # Build history entry
         timestamp = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+        # When re-submitting work after review feedback, preserve old feedback and
+        # mark unresolved checklist items as done with a comment.
+        if target_lane == "for_review" and current_review_status in {"has_feedback", "acknowledged"}:
+            feedback_fixer = agent or extract_scalar(updated_front, "agent") or "unknown"
+            updated_body = _mark_review_feedback_done_comments(updated_body, feedback_fixer, timestamp)
+            updated_front = set_scalar(updated_front, "review_status", "acknowledged")
+
+        # Build history entry
         agent_name = agent or extract_scalar(updated_front, "agent") or "unknown"
         shell_pid_val = shell_pid or extract_scalar(updated_front, "shell_pid") or ""
         note_text = note or f"Moved to {target_lane}"
@@ -784,8 +898,6 @@ def move_task(
 
         file_written = False
         if auto_commit:
-            import subprocess
-
             # Extract spec number from feature_slug (e.g., "014" from "014-feature-name")
             spec_number = feature_slug.split('-')[0] if '-' in feature_slug else feature_slug
 
@@ -1249,7 +1361,7 @@ def finalize_tasks(
             frontmatter, body, padding = split_frontmatter(content)
 
             # Update dependencies field
-            updated_front = set_scalar(frontmatter, "dependencies", deps)
+            updated_front = set_scalar(frontmatter, "dependencies", str(deps))
 
             # Rebuild and write
             updated_doc = build_document(updated_front, body, padding)
