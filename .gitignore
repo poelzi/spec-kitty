@@ -43,6 +43,7 @@ env/
 .codex/
 .claudeignore
 *.lock
+!flake.lock
 .worktrees/
 .kittify/.dashboard
 .kittify/workspaces/
@@ -80,3 +81,4 @@ spec-kitty-capabilities.pdf
 
 # Nix results
 result
+.direnv
