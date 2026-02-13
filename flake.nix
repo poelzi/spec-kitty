@@ -81,7 +81,12 @@
             hatchling
             pip
             pkgs.makeWrapper
+            pythonRelaxDepsHook
           ];
+
+          # spec-kitty-events is vendored at specify_cli/spec_kitty_events/
+          # Remove from wheel metadata so pythonRuntimeDepsCheck passes
+          pythonRemoveDeps = [ "spec-kitty-events" ];
 
           propagatedBuildInputs = runtimePythonDeps python3Packages;
 
