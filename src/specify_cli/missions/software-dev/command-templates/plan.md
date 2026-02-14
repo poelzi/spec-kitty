@@ -177,6 +177,7 @@ Planning requirements (scale to complexity):
 
 - Use absolute paths
 - ERROR on gate failures or unresolved clarifications
+- If the feature introduces new slash commands or modifies existing command templates, the plan MUST include a migration work package. Templates are deployed to agent directories via migrations in `src/specify_cli/upgrade/migrations/` — without one, users never receive the command.
 
 ---
 

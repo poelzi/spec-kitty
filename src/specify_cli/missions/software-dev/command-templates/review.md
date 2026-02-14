@@ -23,10 +23,14 @@ If no WP ID is provided, it will automatically find the first work package with 
 - rebase_warning: If you request changes AND any dependents exist, warn those agents to rebase and provide a concrete command (example: `cd .worktrees/FEATURE-WP02 && git rebase FEATURE-WP01`).
 - verify_instruction: Confirm dependency declarations match actual code coupling (imports, shared modules, API contracts).
 
-**After reviewing, scroll to the bottom and run ONE of these commands**:
-- ✅ Approve: `spec-kitty agent tasks move-task WP## --to done --note "Review passed: <summary>"`
+**After reviewing, scroll to the bottom and run ONE of these outcomes**:
+- ✅ Approve:
+  1. Merge approved WP branch to `master` using the command shown in the prompt (uses `git merge --ff-only`).
+  2. Then mark done: `spec-kitty agent tasks move-task WP## --to done --note "Review passed: <summary>"`
 - ❌ Reject: Write feedback to the temp file path shown in the prompt, then run `spec-kitty agent tasks move-task WP## --to planned --review-feedback-file <temp-file-path>`
 
 **The prompt will provide a unique temp file path for feedback - use that exact path to avoid conflicts with other agents!**
 
 **The Python script handles all file updates automatically - no manual editing required!**
+
+**If the WP got approved, merging to `master` is required before moving to `done`, then ensure dependent WPs are rebased as needed.**

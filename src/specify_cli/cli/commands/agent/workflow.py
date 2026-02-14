@@ -1475,13 +1475,20 @@ def review(
             lines.append("─" * 80)
             lines.append("")
 
+        approve_merge_cmd = (
+            f"git -C {repo_root} merge --ff-only {review_ctx['branch_name']}"
+        )
+
         # Next steps
         lines.append("=" * 80)
         lines.append("WHEN YOU'RE DONE:")
         lines.append("=" * 80)
         lines.append("✓ Review passed, no issues:")
+        lines.append("  1. Merge approved WP branch into master:")
+        lines.append(f"     {approve_merge_cmd}")
+        lines.append("  2. Mark WP as done:")
         lines.append(
-            f'  spec-kitty agent tasks move-task {normalized_wp_id} --to done --note "Review passed"'
+            f'     spec-kitty agent tasks move-task {normalized_wp_id} --to done --note "Review passed"'
         )
         lines.append("")
         lines.append(f"⚠️  Changes requested:")
@@ -1531,8 +1538,11 @@ def review(
         lines.append("=" * 80)
         lines.append("")
         lines.append("✅ APPROVE (no issues found):")
+        lines.append("   1. Merge approved WP branch into master:")
+        lines.append(f"      {approve_merge_cmd}")
+        lines.append("   2. Mark WP as done:")
         lines.append(
-            f'   spec-kitty agent tasks move-task {normalized_wp_id} --to done --note "Review passed: <summary>"'
+            f'      spec-kitty agent tasks move-task {normalized_wp_id} --to done --note "Review passed: <summary>"'
         )
         lines.append("")
         # Create unique temp file path for review feedback (avoids conflicts between agents)
@@ -1587,8 +1597,11 @@ def review(
         print(f"    cat {prompt_file}")
         print()
         print("After review, run:")
+        print("  ✅ 1) Merge approved WP branch into master:")
+        print(f"     {approve_merge_cmd}")
+        print("     2) Mark WP as done:")
         print(
-            f'  ✅ spec-kitty agent tasks move-task {normalized_wp_id} --to done --note "Review passed"'
+            f'     spec-kitty agent tasks move-task {normalized_wp_id} --to done --note "Review passed"'
         )
         print(
             f"  ❌ spec-kitty agent tasks move-task {normalized_wp_id} --to planned --review-feedback-file {review_feedback_path}"
