@@ -306,6 +306,13 @@ The WP prompt must show the correct command so agents don't branch from the wron
    - Assign IDs `Txxx` sequentially in execution order.
    - Use `[P]` for parallel-safe items (different files/components).
    - Include migrations, data seeding, observability, and operational chores.
+
+   > **Migration Reminder**: If this feature adds or modifies slash command templates
+   > (files in `command-templates/`), include a subtask for creating an upgrade migration
+   > that deploys the template to all agent directories. Without a migration, users who
+   > run `spec-kitty upgrade` will never receive the new or updated command. See existing
+   > migrations in `src/specify_cli/upgrade/migrations/` for patterns.
+
    - **Ideal subtask granularity**: One clear action (e.g., "Create user model", "Add login endpoint")
    - **Too granular**: "Add import statement", "Fix typo" (bundle these)
    - **Too coarse**: "Build entire API" (split into endpoints)
