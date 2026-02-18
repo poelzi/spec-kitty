@@ -440,6 +440,9 @@ This is intentional - worktrees provide isolation for parallel feature developme
    - Incomplete implementation of stated requirements
    - Logical flaw or race condition
 
+   **NOT grounds for rejection (handle during approval):**
+   - Branch needs rebasing onto base branch (not fast-forwardable). If the implementation itself passes review, perform the rebase yourself (see Step 5). Only reject if the rebase produces complex, non-trivial conflicts that require the implementer's judgment.
+
    **APPROVE ONLY if ALL of these:**
    - Every subtask fully implemented (no shortcuts)
    - All tests pass and actually validate behavior
@@ -450,6 +453,7 @@ This is intentional - worktrees provide isolation for parallel feature developme
    - Code is maintainable and documented
    - No logical flaws or race conditions
    - All verification commands (4.10) executed and passed
+   - Branch rebased onto base if needed (reviewer performs rebase before merge)
 
    **Default stance: REJECT.** Only approve when you've actively tried to find problems and found none. "Looks good" is not good enough - you must prove it's good.
 
@@ -482,9 +486,16 @@ This is intentional - worktrees provide isolation for parallel feature developme
        - Clear `assignee` if needed
      * Append a new entry in the prompt's **Activity Log** with timestamp, reviewer agent, shell PID, and summary of feedback.
      * Run `spec-kitty agent move-task <FEATURE> <TASK_ID> planned --note "Code review complete: [brief summary of issues]"` (use the PowerShell equivalent on Windows) so the move and history update are staged consistently.
-  - **Approved**:
-     * Append Activity Log entry capturing approval details (capture shell PID via `echo $$` or helper script, e.g., `2025-11-11T13:45:00Z – claude – shell_pid=1234 – lane=done – Approved without changes`).
-     * Update frontmatter:
+   - **Approved**:
+      * **Rebase before merge (if needed):** If the WP branch is not fast-forwardable onto the base branch, rebase it:
+        ```bash
+        cd <workspace_path>
+        git rebase <base_branch>
+        ```
+        - If the rebase applies cleanly (no conflicts) or produces only minor/trivial conflicts (e.g., import ordering, adjacent line changes), resolve them and continue with approval.
+        - If the rebase produces complex conflicts that require the implementer's judgment to resolve correctly, REJECT instead and move the WP back to planned with feedback explaining the conflict.
+      * Append Activity Log entry capturing approval details (capture shell PID via `echo $$` or helper script, e.g., `2025-11-11T13:45:00Z – claude – shell_pid=1234 – lane=done – Approved without changes`).
+      * Update frontmatter:
        - Sets `lane: "done"`
        - Sets `review_status: "approved without changes"` (or your custom status)
        - Sets `reviewed_by: <YOUR_AGENT_ID>`

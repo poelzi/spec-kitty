@@ -25,9 +25,12 @@ If no WP ID is provided, it will automatically find the first work package with 
 
 **After reviewing, scroll to the bottom and run ONE of these outcomes**:
 - ✅ Approve:
-  1. Merge approved WP branch to `master` using the command shown in the prompt (uses `git merge --ff-only`).
-  2. Then mark done: `spec-kitty agent tasks move-task WP## --to done --note "Review passed: <summary>"`
+  1. Rebase WP branch onto base if `git merge --ff-only` fails (command shown in prompt). If the rebase is clean or conflicts are trivial, resolve them and continue. If conflicts are complex/non-trivial, reject instead.
+  2. Merge approved WP branch to `master` using the command shown in the prompt (uses `git merge --ff-only`).
+  3. Then mark done: `spec-kitty agent tasks move-task WP## --to done --note "Review passed: <summary>"`
 - ❌ Reject: Write feedback to the temp file path shown in the prompt, then run `spec-kitty agent tasks move-task WP## --to planned --review-feedback-file <temp-file-path>`
+
+**A missing rebase alone is NOT grounds for rejection** - if the implementation passes review, perform the rebase yourself before merging.
 
 **The prompt will provide a unique temp file path for feedback - use that exact path to avoid conflicts with other agents!**
 

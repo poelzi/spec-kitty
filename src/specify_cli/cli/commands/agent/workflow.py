@@ -1483,14 +1483,25 @@ def review(
             f"git -C {repo_root} merge --ff-only {review_ctx['branch_name']}"
         )
 
+        # Rebase command for approval flow
+        rebase_cmd = f"cd {workspace_path} && git rebase {review_ctx['base_branch']}" if review_ctx["base_branch"] != "unknown" else f"cd {workspace_path} && git rebase main"
+
         # Next steps
         lines.append("=" * 80)
         lines.append("WHEN YOU'RE DONE:")
         lines.append("=" * 80)
         lines.append("✓ Review passed, no issues:")
-        lines.append("  1. Merge approved WP branch into master:")
+        lines.append("  1. Rebase WP branch onto base (if merge --ff-only fails):")
+        lines.append(f"     {rebase_cmd}")
+        lines.append(
+            "     If rebase is clean or conflicts are trivial, resolve and continue."
+        )
+        lines.append(
+            "     If conflicts are complex/non-trivial, REJECT instead (move to planned)."
+        )
+        lines.append("  2. Merge approved WP branch into master:")
         lines.append(f"     {approve_merge_cmd}")
-        lines.append("  2. Mark WP as done:")
+        lines.append("  3. Mark WP as done:")
         lines.append(
             f'     spec-kitty agent tasks move-task {normalized_wp_id} --to done --note "Review passed"'
         )
@@ -1542,9 +1553,17 @@ def review(
         lines.append("=" * 80)
         lines.append("")
         lines.append("✅ APPROVE (no issues found):")
-        lines.append("   1. Merge approved WP branch into master:")
+        lines.append("   1. Rebase WP branch onto base (if merge --ff-only fails):")
+        lines.append(f"      {rebase_cmd}")
+        lines.append(
+            "      If rebase is clean or conflicts are trivial, resolve and continue."
+        )
+        lines.append(
+            "      If conflicts are complex/non-trivial, REJECT instead (move to planned)."
+        )
+        lines.append("   2. Merge approved WP branch into master:")
         lines.append(f"      {approve_merge_cmd}")
-        lines.append("   2. Mark WP as done:")
+        lines.append("   3. Mark WP as done:")
         lines.append(
             f'      spec-kitty agent tasks move-task {normalized_wp_id} --to done --note "Review passed: <summary>"'
         )
@@ -1601,9 +1620,11 @@ def review(
         print(f"    cat {prompt_file}")
         print()
         print("After review, run:")
-        print("  ✅ 1) Merge approved WP branch into master:")
+        print("  ✅ 1) Rebase if needed (when ff-only merge fails):")
+        print(f"     {rebase_cmd}")
+        print("     2) Merge approved WP branch into master:")
         print(f"     {approve_merge_cmd}")
-        print("     2) Mark WP as done:")
+        print("     3) Mark WP as done:")
         print(
             f'     spec-kitty agent tasks move-task {normalized_wp_id} --to done --note "Review passed"'
         )
