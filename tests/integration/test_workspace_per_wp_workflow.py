@@ -13,7 +13,6 @@ from __future__ import annotations
 
 import os
 import subprocess
-import sys
 from pathlib import Path
 
 import pytest
@@ -149,31 +148,25 @@ def implement_wp(
         # Workspace already exists, return it
         return workspace_path
 
-    # Ensure we're on the feature branch for context detection
-    # Check if feature branch exists
-    result = subprocess.run(
-        ["git", "rev-parse", "--verify", feature_slug],
-        cwd=repo,
-        capture_output=True,
-        check=False
-    )
-
-    if result.returncode != 0:
-        # Feature branch doesn't exist, create it
-        subprocess.run(
-            ["git", "checkout", "-b", feature_slug],
+    # Ensure we're on the primary branch (main/master) for planning artifact checks.
+    # The implement command will detect the feature from kitty-specs/ automatically.
+    # With the v0.15.0 landing branch workflow, ensure_landing_branch() may modify
+    # meta.json, so we need to be on the primary branch for auto-commit to work.
+    for primary in ("main", "master"):
+        check = subprocess.run(
+            ["git", "rev-parse", "--verify", primary],
             cwd=repo,
-            check=True,
-            capture_output=True
+            capture_output=True,
+            check=False,
         )
-    else:
-        # Feature branch exists, check it out
-        subprocess.run(
-            ["git", "checkout", feature_slug],
-            cwd=repo,
-            check=True,
-            capture_output=True
-        )
+        if check.returncode == 0:
+            subprocess.run(
+                ["git", "checkout", primary],
+                cwd=repo,
+                capture_output=True,
+                check=False,
+            )
+            break
 
     # Build spec-kitty implement command arguments
     args = ["implement", wp_id]
@@ -262,7 +255,9 @@ def test_planning_in_main_no_worktrees(tmp_path):
     # Verify still NO worktrees
     if worktrees_dir.exists():
         worktree_count = len(list(worktrees_dir.iterdir()))
-        assert worktree_count == 0, f"Expected no worktrees after tasks, found {worktree_count}"
+        assert worktree_count == 0, (
+            f"Expected no worktrees after tasks, found {worktree_count}"
+        )
 
     # Verify 3 commits in main (initial + spec + plan + tasks = 4 total)
     result = subprocess.run(
@@ -275,8 +270,6 @@ def test_planning_in_main_no_worktrees(tmp_path):
     assert "Add spec" in result.stdout
     assert "Add plan" in result.stdout
     assert "Add tasks" in result.stdout
-
-
 
 
 # ============================================================================
@@ -341,8 +334,9 @@ def test_implement_wp_no_dependencies(tmp_path):
 
     # Verify sparse-checkout excludes kitty-specs from worktree
     # (kitty-specs status is tracked in main repo only, preventing state divergence)
-    assert not (workspace / "kitty-specs").exists(), \
+    assert not (workspace / "kitty-specs").exists(), (
         "kitty-specs should be excluded from worktree via sparse-checkout"
+    )
 
 
 # ============================================================================
@@ -414,11 +408,17 @@ def test_implement_wp_with_dependencies(tmp_path):
         text=True,
         check=True,
     )
-    assert "WP01 work" in result.stdout, f"WP02 should have WP01 work in history, got: {result.stdout}"
+    assert "WP01 work" in result.stdout, (
+        f"WP02 should have WP01 work in history, got: {result.stdout}"
+    )
 
     # Verify both branches exist
     result = subprocess.run(
-        ["git", "branch", "--list"], cwd=repo, capture_output=True, text=True, check=True
+        ["git", "branch", "--list"],
+        cwd=repo,
+        capture_output=True,
+        text=True,
+        check=True,
     )
     assert "011-test-WP01" in result.stdout
     assert "011-test-WP02" in result.stdout
@@ -762,7 +762,10 @@ def test_merge_workspace_per_wp_preparation(tmp_path):
     # Get the default branch name (could be 'main' or 'master')
     branch_result = subprocess.run(
         ["git", "rev-parse", "--abbrev-ref", "HEAD"],
-        cwd=repo, capture_output=True, text=True, check=True
+        cwd=repo,
+        capture_output=True,
+        text=True,
+        check=True,
     )
     default_branch = branch_result.stdout.strip()
 
@@ -815,7 +818,9 @@ def test_pre_upgrade_validation_blocks_legacy_worktrees(tmp_path):
     assert any("009-old-feature" in err for err in errors)
     # Error should mention merge or delete
     errors_text = " ".join(errors).lower()
-    assert "merge" in errors_text or "delete" in errors_text or "complete" in errors_text
+    assert (
+        "merge" in errors_text or "delete" in errors_text or "complete" in errors_text
+    )
 
 
 def test_pre_upgrade_validation_passes_with_new_worktrees(tmp_path):

@@ -678,17 +678,18 @@ def perform_acceptance(
         instructions.extend(
             [
                 f"Review the acceptance commit on branch `{branch}`.",
-                f"Push your branch: `git push origin {branch}`",
-                "Open a pull request referencing spec/plan/tasks artifacts.",
+                "Merge WP branches into the landing branch: `spec-kitty merge`",
+                f"Push the landing branch: `git push origin {branch}`",
+                "Open a pull request from the landing branch referencing spec/plan/tasks artifacts.",
                 "Include acceptance summary and test evidence in the PR description.",
             ]
         )
     elif mode == "local":
         instructions.extend(
             [
-                "Switch to your integration branch (e.g., `git checkout main`).",
-                "Synchronize it (e.g., `git pull --ff-only`).",
-                f"Merge the feature: `git merge {branch}`",
+                "Merge WP branches into the landing branch: `spec-kitty merge`",
+                "Integrate landing branch into main: `spec-kitty integrate`",
+                "Or manually: `git checkout main && git merge {branch}`".format(branch=branch),
             ]
         )
     else:  # checklist
@@ -701,7 +702,7 @@ def perform_acceptance(
             f"After merging, remove the worktree: `git worktree remove {summary.worktree_root}`"
         )
     cleanup_instructions.append(
-        f"Delete the feature branch when done: `git branch -d {branch}`"
+        f"Landing branch '{branch}' is preserved for upstream PR and future changes."
     )
 
     notes: List[str] = []

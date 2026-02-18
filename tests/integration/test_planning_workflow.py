@@ -36,11 +36,13 @@ def test_create_feature_in_main_no_worktree(test_project: Path, run_cli) -> None
 
     # Verify NO worktree was created
     worktree_dir = test_project / ".worktrees" / "001-test-planning-workflow"
-    assert not worktree_dir.exists(), "Worktree should NOT be created during feature creation"
+    assert not worktree_dir.exists(), (
+        "Worktree should NOT be created during feature creation"
+    )
 
-    # Verify spec.md was committed to main
+    # Verify spec.md was committed to main (create-feature makes 2 commits: spec + meta)
     log_result = subprocess.run(
-        ["git", "log", "--oneline", "-1"],
+        ["git", "log", "--oneline", "-3"],
         cwd=test_project,
         capture_output=True,
         text=True,
@@ -68,8 +70,7 @@ def test_setup_plan_in_main(test_project: Path, run_cli) -> None:
     plan_template_dir.mkdir(parents=True, exist_ok=True)
     plan_template = plan_template_dir / "plan-template.md"
     plan_template.write_text(
-        "# Implementation Plan\n\nThis is a test plan template.\n",
-        encoding="utf-8"
+        "# Implementation Plan\n\nThis is a test plan template.\n", encoding="utf-8"
     )
 
     # Run setup-plan command
@@ -105,8 +106,7 @@ def test_full_planning_workflow_no_worktrees(test_project: Path, run_cli) -> Non
     plan_template_dir = test_project / ".kittify" / "templates"
     plan_template_dir.mkdir(parents=True, exist_ok=True)
     (plan_template_dir / "plan-template.md").write_text(
-        "# Plan Template\n",
-        encoding="utf-8"
+        "# Plan Template\n", encoding="utf-8"
     )
 
     # Step 1: Create feature (specify phase)
@@ -140,7 +140,8 @@ def test_full_planning_workflow_no_worktrees(test_project: Path, run_cli) -> Non
 
     # Create tasks.md with dependencies
     tasks_md = feature_dir / "tasks.md"
-    tasks_md.write_text("""# Work Packages
+    tasks_md.write_text(
+        """# Work Packages
 
 ## Work Package WP01: Foundation
 **Dependencies**: None
@@ -156,7 +157,9 @@ def test_full_planning_workflow_no_worktrees(test_project: Path, run_cli) -> Non
 
 ### Included Subtasks
 - T003 Build REST endpoints
-""", encoding="utf-8")
+""",
+        encoding="utf-8",
+    )
 
     # Create WP files WITHOUT dependencies (simulate LLM before finalize-tasks)
     wp01_content = """---
@@ -233,7 +236,9 @@ Test work package content.
     if worktrees_dir.exists():
         # Directory might exist but should be empty
         worktree_contents = list(worktrees_dir.iterdir())
-        assert len(worktree_contents) == 0, "No worktrees should be created during planning"
+        assert len(worktree_contents) == 0, (
+            "No worktrees should be created during planning"
+        )
 
     # Verify: All artifacts committed to main branch
     log_result = subprocess.run(
@@ -268,7 +273,9 @@ Test work package content.
         check=True,
     )
     default_branch = branch_result.stdout.strip()
-    assert default_branch in ("main", "master"), f"Should still be on default branch, got: {default_branch}"
+    assert default_branch in ("main", "master"), (
+        f"Should still be on default branch, got: {default_branch}"
+    )
 
 
 def test_check_prerequisites_works_in_main(test_project: Path, run_cli) -> None:
@@ -296,6 +303,7 @@ def test_check_prerequisites_works_in_main(test_project: Path, run_cli) -> None:
 
     # Should find the latest feature and validate its structure
     import json
+
     output = json.loads(result.stdout)
     assert output["valid"] is True, "Feature structure should be valid"
     assert "spec_file" in output["paths"], "Should detect spec.md"
@@ -321,4 +329,6 @@ def test_feature_creation_works_from_any_branch(test_project: Path, run_cli) -> 
         "--json",
     )
 
-    assert result.returncode == 0, f"create-feature should work from any branch: {result.stderr}"
+    assert result.returncode == 0, (
+        f"create-feature should work from any branch: {result.stderr}"
+    )

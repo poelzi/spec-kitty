@@ -1,11 +1,11 @@
 ---
-description: Merge a completed feature into the main branch and clean up worktree
+description: Merge WP branches into the feature's landing branch and clean up worktrees
 ---
 
-# /spec-kitty.merge - Merge Feature to Main
+# /spec-kitty.merge - Merge WP Branches to Landing Branch
 
-**Version**: 0.11.0+
-**Purpose**: Merge ALL completed work packages for a feature into main branch.
+**Version**: 0.15.0+
+**Purpose**: Merge ALL completed work packages into the feature's landing branch. The landing branch is preserved for upstream PR. Use `spec-kitty integrate` to merge landing branch into main.
 
 ## CRITICAL: Workspace-per-WP Model (0.11.0)
 

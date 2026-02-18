@@ -337,19 +337,28 @@ def execute_merge(
         else:
             tracker.complete("worktree", f"removed {len(ordered_workspaces)} worktrees")
 
-    # Step 9: Delete branches
+    # Step 9: Delete WP branches (never delete landing branch)
     if delete_branch:
         tracker.start("branch")
         failed_deletions = []
+        deleted_count = 0
         for wt_path, wp_id, branch in ordered_workspaces:
+            # Guard: never delete the landing branch (feature_slug without -WP## suffix)
+            if branch == feature_slug:
+                console.print(
+                    f"[dim]Skipping landing branch '{branch}' (preserved for upstream PR)[/dim]"
+                )
+                continue
             try:
                 run_command(["git", "branch", "-d", branch])
                 console.print(f"[green]\u2713[/green] Deleted branch: {branch}")
+                deleted_count += 1
             except Exception:
                 # Try force delete
                 try:
                     run_command(["git", "branch", "-D", branch])
                     console.print(f"[green]\u2713[/green] Force deleted branch: {branch}")
+                    deleted_count += 1
                 except Exception:
                     failed_deletions.append((wp_id, branch))
 
@@ -363,7 +372,14 @@ def execute_merge(
             for wp_id, branch in failed_deletions:
                 console.print(f"  {wp_id}: git branch -D {branch}")
         else:
-            tracker.complete("branch", f"deleted {len(ordered_workspaces)} branches")
+            tracker.complete("branch", f"deleted {deleted_count} WP branches")
+
+    # Landing branch is preserved for upstream PR
+    if target_branch == feature_slug:
+        console.print(
+            f"[dim]Landing branch '{target_branch}' preserved "
+            f"(use 'spec-kitty integrate' to merge into main)[/dim]"
+        )
 
     # Clear state on successful completion
     clear_state(repo_root)
@@ -538,21 +554,32 @@ def execute_legacy_merge(
             console.print(f"Run manually: git worktree remove {feature_worktree_path}")
 
     if delete_branch:
-        tracker.start("branch")
-        try:
-            run_command(["git", "branch", "-d", current_branch])
-            tracker.complete("branch", f"deleted {current_branch}")
-        except Exception as exc:
+        # Protect landing branch from deletion — it is the upstream PR target.
+        # A landing branch matches the feature slug pattern (###-name) without -WP## suffix.
+        import re
+        _is_landing = re.match(r'^\d{3}-.+$', current_branch) and not re.search(r'-WP\d{2}$', current_branch)
+        if _is_landing:
+            tracker.skip("branch", f"landing branch '{current_branch}' preserved")
+            console.print(
+                f"[dim]Landing branch '{current_branch}' preserved "
+                f"(use 'spec-kitty integrate' to merge into main)[/dim]"
+            )
+        else:
+            tracker.start("branch")
             try:
-                run_command(["git", "branch", "-D", current_branch])
-                tracker.complete("branch", f"force deleted {current_branch}")
-            except Exception:
-                tracker.error("branch", str(exc))
-                console.print(tracker.render())
-                console.print(
-                    f"\n[yellow]Warning:[/yellow] Could not delete branch {current_branch}."
-                )
-                console.print(f"Run manually: git branch -d {current_branch}")
+                run_command(["git", "branch", "-d", current_branch])
+                tracker.complete("branch", f"deleted {current_branch}")
+            except Exception as exc:
+                try:
+                    run_command(["git", "branch", "-D", current_branch])
+                    tracker.complete("branch", f"force deleted {current_branch}")
+                except Exception:
+                    tracker.error("branch", str(exc))
+                    console.print(tracker.render())
+                    console.print(
+                        f"\n[yellow]Warning:[/yellow] Could not delete branch {current_branch}."
+                    )
+                    console.print(f"Run manually: git branch -d {current_branch}")
 
     console.print(tracker.render())
     console.print(

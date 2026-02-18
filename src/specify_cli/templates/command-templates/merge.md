@@ -1,5 +1,5 @@
 ---
-description: Merge a completed feature into the main branch and clean up worktree
+description: Merge WP branches into the feature's landing branch and clean up worktrees
 scripts:
   sh: "spec-kitty agent feature merge"
   ps: "spec-kitty agent"
@@ -9,9 +9,11 @@ scripts:
 *Path: [templates/commands/merge.md](templates/commands/merge.md)*
 
 
-# Merge Feature Branch
+# Merge WP Branches to Landing Branch
 
-This command merges a completed feature branch into the main/target branch and handles cleanup of worktrees and branches.
+This command merges completed WP branches into the feature's **landing branch** (named after the feature slug, e.g., `010-my-feature`). The landing branch is NEVER deleted - it serves as the upstream PR target.
+
+To merge the landing branch into main for local integration, use `spec-kitty integrate`.
 
 ## ⛔ Location Pre-flight Check (CRITICAL)
 

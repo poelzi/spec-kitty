@@ -642,6 +642,176 @@ def get_feature_target_branch(repo_root: Path, feature_slug: str) -> str:
 
 
 # ============================================================================
+# Landing Branch Helpers
+# ============================================================================
+
+
+def get_feature_upstream_branch(repo_root: Path, feature_slug: str) -> str:
+    """Get the upstream (base) branch for a feature's landing branch.
+
+    The upstream_branch is the branch from which the feature's landing branch
+    was created (e.g., "main"). Planning artifacts (kitty-specs/) are committed
+    to this branch, and `spec-kitty integrate` merges the landing branch here.
+
+    Args:
+        repo_root: Repository root path (may be worktree)
+        feature_slug: Feature slug (e.g., "010-my-feature")
+
+    Returns:
+        Upstream branch name (defaults to "main" if not set)
+
+    Note:
+        Falls back to "main" if meta.json is missing, malformed, or lacks
+        the upstream_branch field. This ensures backward compatibility with
+        features created before landing branch support (pre-0.15.0).
+    """
+    import json
+
+    main_repo_root = _get_main_repo_root(repo_root)
+    feature_dir = main_repo_root / "kitty-specs" / feature_slug
+    meta_file = feature_dir / "meta.json"
+
+    if not meta_file.exists():
+        return "main"
+
+    try:
+        meta = json.loads(meta_file.read_text(encoding="utf-8"))
+        return meta.get("upstream_branch", "main")
+    except (json.JSONDecodeError, KeyError, OSError):
+        return "main"
+
+
+def ensure_landing_branch(repo_root: Path, feature_slug: str) -> str:
+    """Ensure a landing branch exists for a feature, creating it if needed.
+
+    The landing branch is named after the feature slug (e.g., "010-my-feature").
+    It serves as the merge target for WP branches and as the upstream PR target.
+    It is never deleted during cleanup.
+
+    For legacy features (pre-0.15.0) where target_branch points to "main",
+    this function will:
+    1. Create the landing branch from the current upstream branch
+    2. Update meta.json to set target_branch to the landing branch name
+       and upstream_branch to the previous target_branch value
+
+    Args:
+        repo_root: Repository root path (may be worktree)
+        feature_slug: Feature slug (e.g., "010-my-feature")
+
+    Returns:
+        The landing branch name (always the feature slug)
+
+    Raises:
+        RuntimeError: If landing branch cannot be created
+    """
+    import json
+    import subprocess
+
+    main_repo_root = _get_main_repo_root(repo_root)
+    landing_branch = feature_slug
+    feature_dir = main_repo_root / "kitty-specs" / feature_slug
+    meta_file = feature_dir / "meta.json"
+
+    # Check if landing branch already exists as a git ref
+    branch_exists = subprocess.run(
+        ["git", "rev-parse", "--verify", landing_branch],
+        cwd=main_repo_root,
+        capture_output=True,
+        check=False,
+    ).returncode == 0
+
+    # Read current meta.json
+    meta = {}
+    if meta_file.exists():
+        try:
+            meta = json.loads(meta_file.read_text(encoding="utf-8"))
+        except (json.JSONDecodeError, OSError):
+            meta = {}
+
+    current_target = meta.get("target_branch", "main")
+    current_upstream = meta.get("upstream_branch")
+
+    # Already configured: target_branch is the landing branch
+    if current_target == landing_branch and branch_exists:
+        return landing_branch
+
+    # Determine the upstream branch (what the landing branch is based on)
+    if current_upstream:
+        upstream = current_upstream
+    elif current_target and current_target != landing_branch:
+        # Legacy: target_branch was "main" or "2.x" -- that becomes upstream
+        upstream = current_target
+    else:
+        upstream = "main"
+
+    # Create the landing branch if it doesn't exist
+    if not branch_exists:
+        # Verify upstream exists, fall back to primary branch
+        upstream_exists = subprocess.run(
+            ["git", "rev-parse", "--verify", upstream],
+            cwd=main_repo_root,
+            capture_output=True,
+            check=False,
+        ).returncode == 0
+
+        if not upstream_exists:
+            # Find primary branch (main or master)
+            for candidate in ("main", "master"):
+                if subprocess.run(
+                    ["git", "rev-parse", "--verify", candidate],
+                    cwd=main_repo_root,
+                    capture_output=True,
+                    check=False,
+                ).returncode == 0:
+                    upstream = candidate
+                    break
+            else:
+                raise RuntimeError(
+                    f"Cannot create landing branch '{landing_branch}': "
+                    f"upstream branch '{upstream}' does not exist and no primary branch found"
+                )
+
+        create_result = subprocess.run(
+            ["git", "branch", landing_branch, upstream],
+            cwd=main_repo_root,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        if create_result.returncode != 0:
+            # Branch might already exist (race condition) - verify
+            recheck = subprocess.run(
+                ["git", "rev-parse", "--verify", landing_branch],
+                cwd=main_repo_root,
+                capture_output=True,
+                check=False,
+            )
+            if recheck.returncode != 0:
+                raise RuntimeError(
+                    f"Could not create landing branch '{landing_branch}': "
+                    f"{create_result.stderr or create_result.stdout}"
+                )
+
+    # Update meta.json if needed
+    needs_update = (
+        meta.get("target_branch") != landing_branch
+        or meta.get("upstream_branch") != upstream
+    )
+    if needs_update and meta_file.exists():
+        meta["target_branch"] = landing_branch
+        meta["upstream_branch"] = upstream
+        try:
+            meta_file.write_text(
+                json.dumps(meta, indent=2, ensure_ascii=False) + "\n",
+                encoding="utf-8",
+            )
+        except OSError:
+            pass  # Non-fatal: meta.json update failed but branch was created
+
+    return landing_branch
+
+
+# ============================================================================
 # Change Stack Helpers (for /spec-kitty.change routing)
 # ============================================================================
 
@@ -706,6 +876,9 @@ __all__ = [
     "detect_feature_directory",
     # Target branch detection
     "get_feature_target_branch",
+    # Landing branch helpers
+    "get_feature_upstream_branch",
+    "ensure_landing_branch",
     # Change stack helpers
     "is_primary_branch",
     "try_detect_feature_slug",

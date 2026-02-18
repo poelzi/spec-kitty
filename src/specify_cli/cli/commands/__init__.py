@@ -4,33 +4,36 @@ from __future__ import annotations
 
 import typer
 
-from . import accept as accept_module
-from . import agent as agent_module
-from . import change as change_module
-from . import context as context_module
-from . import dashboard as dashboard_module
-from . import implement as implement_module
-from . import merge as merge_module
-from . import mission as mission_module
-from . import ops as ops_module
-from . import orchestrate as orchestrate_module
-from . import repair as repair_module
-from . import research as research_module
-from . import sync as sync_module
-from . import upgrade as upgrade_module
-from . import validate_encoding as validate_encoding_module
-from . import validate_tasks as validate_tasks_module
-from . import verify as verify_module
-
 
 def register_commands(app: typer.Typer) -> None:
     """Attach all extracted commands to the root Typer application."""
+    # Import modules lazily to avoid circular import issues
+    from . import accept as accept_module
+    from . import agent as agent_module
+    from . import change as change_module
+    from . import context as context_module
+    from . import dashboard as dashboard_module
+    from . import implement as implement_module
+    from . import integrate as integrate_module
+    from . import merge as merge_module
+    from . import mission as mission_module
+    from . import ops as ops_module
+    from . import orchestrate as orchestrate_module
+    from . import repair as repair_module
+    from . import research as research_module
+    from . import sync as sync_module
+    from . import upgrade as upgrade_module
+    from . import validate_encoding as validate_encoding_module
+    from . import validate_tasks as validate_tasks_module
+    from . import verify as verify_module
+
     app.command()(accept_module.accept)
     app.add_typer(agent_module.app, name="agent")
     app.command()(change_module.change)
     app.add_typer(context_module.app, name="context")
     app.command()(dashboard_module.dashboard)
     app.command()(implement_module.implement)
+    app.command()(integrate_module.integrate)
     app.command()(merge_module.merge)
     app.add_typer(mission_module.app, name="mission")
     app.add_typer(ops_module.app, name="ops")
