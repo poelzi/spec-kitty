@@ -119,7 +119,7 @@ def check_dependency_status(
 
 
 def predict_merge_conflicts(
-    repo_root: Path, branches: list[str], target: str = "main"
+    repo_root: Path, branches: list[str], target: str | None = None
 ) -> dict[str, list[str]]:
     """Predict which files will conflict when merging branches.
 
@@ -136,6 +136,10 @@ def predict_merge_conflicts(
     """
     import subprocess
 
+    if target is None:
+        from specify_cli.core.git_ops import resolve_primary_branch
+        target = resolve_primary_branch(repo_root)
+
     conflicts = {}
 
     # Check each branch against target
@@ -147,6 +151,8 @@ def predict_merge_conflicts(
                 cwd=repo_root,
                 capture_output=True,
                 text=True,
+                encoding="utf-8",
+                errors="replace",
                 check=False,
             )
 

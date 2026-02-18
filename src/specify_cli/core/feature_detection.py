@@ -177,6 +177,8 @@ def _detect_from_git_branch(repo_root: Path) -> Optional[str]:
             cwd=repo_root,
             capture_output=True,
             text=True,
+            encoding="utf-8",
+            errors="replace",
             check=True,
         )
         branch = result.stdout.strip()
@@ -351,6 +353,7 @@ def detect_feature(
     env: Mapping[str, str] | None = None,
     mode: Literal["strict", "lenient"] = "strict",
     allow_single_auto: bool = True,
+    announce_fallback: bool = True,
 ) -> FeatureContext | None:
     """
     Unified feature detection with configurable behavior.
@@ -371,6 +374,7 @@ def detect_feature(
         env: Environment variables (defaults to os.environ)
         mode: "strict" raises error if ambiguous, "lenient" returns None
         allow_single_auto: Auto-detect if exactly one feature exists
+        announce_fallback: Emit console notice when fallback_latest_incomplete is selected
 
     Returns:
         FeatureContext with detection details, or None in lenient mode
@@ -435,12 +439,13 @@ def detect_feature(
                 latest = find_latest_incomplete_feature(repo_root)
                 if latest:
                     # Import console only if needed (avoid circular imports at module level)
-                    try:
-                        from rich.console import Console
-                        console = Console()
-                        console.print(f"[yellow]ℹ️  Auto-selected latest incomplete: {latest}[/yellow]")
-                    except ImportError:
-                        pass  # Silently skip if rich not available
+                    if announce_fallback:
+                        try:
+                            from rich.console import Console
+                            console = Console()
+                            console.print(f"[yellow]ℹ️  Auto-selected latest incomplete: {latest}[/yellow]")
+                        except ImportError:
+                            pass  # Silently skip if rich not available
 
                     detected_slug = latest
                     detection_method = "fallback_latest_incomplete"
@@ -617,20 +622,23 @@ def get_feature_target_branch(repo_root: Path, feature_slug: str) -> str:
         before the target_branch field was introduced (version 0.13.8).
     """
     import json
+    from specify_cli.core.git_ops import resolve_primary_branch
 
     main_repo_root = _get_main_repo_root(repo_root)
     feature_dir = main_repo_root / "kitty-specs" / feature_slug
     meta_file = feature_dir / "meta.json"
 
+    fallback = resolve_primary_branch(main_repo_root)
+
     if not meta_file.exists():
-        return "main"
+        return fallback
 
     try:
         meta = json.loads(meta_file.read_text(encoding="utf-8"))
-        return meta.get("target_branch", "main")
+        return meta.get("target_branch", fallback)
     except (json.JSONDecodeError, KeyError, OSError):
         # Safe fallback for any error
-        return "main"
+        return fallback
 
 
 # ============================================================================

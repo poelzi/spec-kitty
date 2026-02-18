@@ -1,6 +1,6 @@
 [project]
 name = "spec-kitty-cli"
-version = "0.14.2"
+version = "0.15.3"
 description = "Spec Kitty, a tool for Specification Driven Development (SDD) agentic projects, with kanban and git worktree isolation."
 readme = "README.md"
 license = { file = "LICENSE" }
@@ -73,7 +73,9 @@ Changelog = "https://github.com/Priivacy-ai/spec-kitty/blob/main/CHANGELOG.md"
 [project.optional-dependencies]
 test = [
     "pytest>=7.4",
+    "pytest-asyncio>=0.21.0",  # Required for async orchestrator tests
     "build>=1.0.0",  # Required for distribution tests (wheel building)
+    "respx>=0.21.0",  # Required for HTTP mocking in integration tests
 ]
 
 [project.scripts]

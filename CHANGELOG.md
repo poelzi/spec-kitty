@@ -7,6 +7,67 @@ All notable changes to the Spec Kitty CLI and templates are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.15.3] - 2026-02-14
+
+### 🐛 Fixed
+
+- **Orchestrator deadlock**: Fixed false "No progress possible" detection when WP tasks raise exceptions or complete but leave WPs in intermediate states (IMPLEMENTATION/REVIEW). The orchestrator now properly marks failed WPs as FAILED and restarts orphaned WPs, preventing deadlock cascades. (#137, @tannn)
+- **Exception handling**: Task exceptions now properly mark WPs as FAILED with error details, allowing dependent WPs to recognize failure instead of blocking indefinitely
+- **WP restart logic**: Added restart counter to prevent infinite restart loops if WP repeatedly fails to advance state. Restarts are now capped at `max_retries` (default: 3)
+- **State recovery**: Improved detection of interrupted implementations (IMPLEMENTATION status without `implementation_completed` timestamp) to automatically reset and retry
+
+### 🧹 Maintenance
+
+- **Test coverage**: Added 8 new orchestrator tests covering exception handling, restart scenarios, deadlock detection, and state persistence
+- **Test quality**: Reorganized test suite with proper markers (`@pytest.mark.orchestrator_exception_handling`, `@pytest.mark.orchestrator_deadlock_detection`) and class grouping following project conventions
+
+## [0.15.2] - 2026-02-13
+
+### 🐛 Fixed
+
+- **Unborn branch misdetected as detached HEAD**: `get_current_branch()` now uses `git branch --show-current` (Git 2.22+) with fallback to `git rev-parse --abbrev-ref HEAD` for older Git. Correctly returns the branch name on fresh repos with no commits, fixing false "Not in a git repository" errors during `spec-kitty init`.
+- **Windows subprocess decode crash**: Added `encoding="utf-8", errors="replace"` to all 113 `subprocess.run(text=True)` calls across 31 files. Prevents `UnicodeDecodeError` on Windows systems with non-UTF-8 locale settings.
+- **Pre-commit hook blocks commits when Python unavailable**: Expanded interpreter detection to try `python3`, `python`, and `py` (Windows launcher) with a smoke test. Removed `set -e` so non-encoding Python failures (e.g. filenames with special characters) warn-and-skip instead of blocking commits. Distinguishes Python execution failure from actual encoding errors via distinct exit codes.
+- **Init reports "project ready" even when git init failed**: `init` now raises `RuntimeError` after `tracker.error()` when `init_git_repo()` returns False, triggering the failure panel and non-zero exit instead of falsely reporting success.
+- **PowerShell equivalents in implement templates**: Added PowerShell syntax examples (in collapsible `<details>` blocks) after bash code blocks in implement templates for all 3 missions (software-dev, research, documentation).
+
+### 🔧 Changed
+
+- Removed 7 duplicate inline `subprocess.run(["git", "rev-parse", "--abbrev-ref", "HEAD"])` calls in `feature.py`, `tasks.py`, and `workflow.py`, replacing them with the centralized `get_current_branch()` helper.
+- Updated all callers that checked `== "HEAD"` to check `is None` instead, since `git branch --show-current` never returns the literal string `"HEAD"`.
+
+## [0.15.1] - 2026-02-12
+
+### 🐛 Fixed
+
+- **Dynamic primary branch detection**: Replaced 26 hardcoded `"main"` branch references across 13 files with dynamic detection via `resolve_primary_branch()`. Repos using `master`, `develop`, or custom primary branches now work correctly for merge operations, branch resolution, manifest status checks, and CLI defaults.
+- **Deduplicated branch resolution**: Consolidated 4 duplicate copies of `_resolve_primary_branch()` scattered across CLI commands into a single centralized implementation in `core/git_ops.py` with lightweight delegating wrappers.
+- **Multi-parent merge target**: `create_multi_parent_base()` now accepts explicit `target_branch` parameter instead of hardcoding `"main"` for merge-base calculations.
+
+### ✅ Added
+
+- 20 integration tests covering master/develop/custom branch scenarios for primary branch detection, target branch resolution, manifest status, multi-parent merge, and conflict prediction.
+
+## [0.15.0] - 2026-02-11
+
+### 🐛 Fixed
+
+- **#95 - Kebab-case validation**: Feature slugs now validated before creation - prevents creation of invalid feature directories with uppercase/underscores/spaces. Enforces kebab-case format (lowercase, hyphens only) at the point of feature creation, with clear error messages guiding users to valid names.
+- **#120 - Gitignore isolation**: Worktree-specific ignores now use `.git/info/exclude` instead of `.gitignore` - prevents cross-contamination when multiple worktrees share the same main repository. Each worktree can have isolated ignore rules without affecting other workspaces.
+- **#117 - Dashboard false-failure**: Accurate process detection with robust PID validation - fixes false "no agent process found" errors. New `is_process_alive()` helper uses `psutil` for cross-platform reliability and handles stale PIDs gracefully.
+- **#124 - Branch routing unification**: Unified branch resolution with no implicit `master` fallback - all branch routing now uses a single `resolve_target_branch()` function. Prevents silent fallback to `master` when target branch is not found, failing fast with actionable errors instead.
+- **#119 - Assignee relaxation**: Optional assignee for done work packages - removes the requirement for `assignee` field in WP frontmatter when WP is in `done` lane. Completed work no longer needs to track who did it.
+- **#122 - Safe commit helper**: Preserve staging area during automated commits - new `safe_commit()` helper stages only the files it needs without clearing pre-existing staged changes. Prevents accidental loss of user's staging state during spec-kitty operations.
+- **#123 - Atomic state transitions**: Lane transitions happen before status file writes - ensures WP frontmatter updates are atomic and consistent. When lane changes fail (e.g., validation errors), the status board is never touched, preventing partial state.
+
+### ✅ Added
+
+- 54+ comprehensive tests for all bug fixes
+- Safe commit helper (`git/commit_helpers.py`)
+- Unified branch resolution (`git/branch_utils.py`)
+- Enhanced process detection utilities (`dashboard/process_utils.py`)
+- Robust validation for feature slug format
+
 ## [0.14.2] - 2026-02-07
 
 ### 🐛 Fixed
