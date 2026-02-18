@@ -487,13 +487,18 @@ This is intentional - worktrees provide isolation for parallel feature developme
      * Append a new entry in the prompt's **Activity Log** with timestamp, reviewer agent, shell PID, and summary of feedback.
      * Run `spec-kitty agent move-task <FEATURE> <TASK_ID> planned --note "Code review complete: [brief summary of issues]"` (use the PowerShell equivalent on Windows) so the move and history update are staged consistently.
    - **Approved**:
-      * **Rebase before merge (if needed):** If the WP branch is not fast-forwardable onto the base branch, rebase it:
+      * **Rebase before merge (if needed):** If the WP branch is not fast-forwardable onto the selected merge target branch (landing by default, upstream only when explicitly chosen), rebase it:
         ```bash
         cd <workspace_path>
-        git rebase <base_branch>
+        git rebase <merge_target_branch>
         ```
         - If the rebase applies cleanly (no conflicts) or produces only minor/trivial conflicts (e.g., import ordering, adjacent line changes), resolve them and continue with approval.
         - If the rebase produces complex conflicts that require the implementer's judgment to resolve correctly, REJECT instead and move the WP back to planned with feedback explaining the conflict.
+      * Merge approved WP branch into the selected merge target branch (landing by default):
+        ```bash
+        git -C <repo_root> checkout <merge_target_branch>
+        git -C <repo_root> merge --ff-only <wp_branch>
+        ```
       * Append Activity Log entry capturing approval details (capture shell PID via `echo $$` or helper script, e.g., `2025-11-11T13:45:00Z – claude – shell_pid=1234 – lane=done – Approved without changes`).
       * Update frontmatter:
        - Sets `lane: "done"`

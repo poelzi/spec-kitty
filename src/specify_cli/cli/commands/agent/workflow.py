@@ -18,6 +18,8 @@ from specify_cli.core.dependency_graph import build_dependency_graph, get_depend
 from specify_cli.core.feature_detection import (
     FeatureDetectionError,
     detect_feature_slug,
+    get_feature_target_branch,
+    get_feature_upstream_branch,
 )
 from specify_cli.core.implement_validation import (
     validate_and_resolve_base,
@@ -1097,6 +1099,32 @@ def _resolve_review_context(
     return ctx
 
 
+def _resolve_review_merge_target(
+    repo_root: Path, feature_slug: str, merge_target: str
+) -> tuple[str, str]:
+    """Resolve merge target mode and branch for review approval instructions.
+
+    Args:
+        repo_root: Repository root path
+        feature_slug: Feature slug
+        merge_target: Requested target mode ("landing" or "upstream")
+
+    Returns:
+        Tuple of (normalized_mode, branch_name)
+    """
+    mode = merge_target.strip().lower()
+    if mode not in {"landing", "upstream"}:
+        print(
+            f"Error: Invalid --merge-target '{merge_target}'. Use 'landing' or 'upstream'."
+        )
+        raise typer.Exit(1)
+
+    if mode == "landing":
+        return mode, get_feature_target_branch(repo_root, feature_slug)
+
+    return mode, get_feature_upstream_branch(repo_root, feature_slug)
+
+
 def _find_first_for_review_wp(repo_root: Path, feature_slug: str) -> Optional[str]:
     """Find the first WP file with lane: "for_review".
 
@@ -1168,6 +1196,13 @@ def review(
             "--agent", help="Agent name (required for auto-move to doing lane)"
         ),
     ] = None,
+    merge_target: Annotated[
+        str,
+        typer.Option(
+            "--merge-target",
+            help="Where approved WP branches are merged: landing or upstream",
+        ),
+    ] = "landing",
 ) -> None:
     """Display work package prompt with review instructions.
 
@@ -1178,6 +1213,7 @@ def review(
 
     Examples:
         spec-kitty agent workflow review WP01 --agent claude
+        spec-kitty agent workflow review WP01 --agent claude --merge-target upstream
         spec-kitty agent workflow review wp02 --agent codex
         spec-kitty agent workflow review --agent gemini  # auto-detects first for_review WP
     """
@@ -1374,6 +1410,11 @@ def review(
             workspace_path, repo_root, feature_slug, wp.frontmatter
         )
 
+        # Resolve merge target for approval flow
+        merge_target_mode, merge_target_branch = _resolve_review_merge_target(
+            repo_root, feature_slug, merge_target
+        )
+
         # Capture dependency warning for both file and summary
         dependents_warning = []
         feature_dir = repo_root / "kitty-specs" / feature_slug
@@ -1480,18 +1521,24 @@ def review(
             lines.append("")
 
         approve_merge_cmd = (
+            f"git -C {repo_root} checkout {merge_target_branch} && "
             f"git -C {repo_root} merge --ff-only {review_ctx['branch_name']}"
         )
 
         # Rebase command for approval flow
-        rebase_cmd = f"cd {workspace_path} && git rebase {review_ctx['base_branch']}" if review_ctx["base_branch"] != "unknown" else f"cd {workspace_path} && git rebase main"
+        rebase_cmd = f"cd {workspace_path} && git rebase {merge_target_branch}"
 
         # Next steps
         lines.append("=" * 80)
         lines.append("WHEN YOU'RE DONE:")
         lines.append("=" * 80)
+        lines.append(
+            f"Merge target mode: {merge_target_mode} (branch: {merge_target_branch})"
+        )
         lines.append("✓ Review passed, no issues:")
-        lines.append("  1. Rebase WP branch onto base (if merge --ff-only fails):")
+        lines.append(
+            "  1. Rebase WP branch onto merge target (if merge --ff-only fails):"
+        )
         lines.append(f"     {rebase_cmd}")
         lines.append(
             "     If rebase is clean or conflicts are trivial, resolve and continue."
@@ -1499,7 +1546,9 @@ def review(
         lines.append(
             "     If conflicts are complex/non-trivial, REJECT instead (move to planned)."
         )
-        lines.append("  2. Merge approved WP branch into master:")
+        lines.append(
+            f"  2. Merge approved WP branch into {merge_target_branch}:"
+        )
         lines.append(f"     {approve_merge_cmd}")
         lines.append("  3. Mark WP as done:")
         lines.append(
@@ -1552,8 +1601,13 @@ def review(
         lines.append("🎯 REVIEW COMPLETE? RUN ONE OF THESE COMMANDS:")
         lines.append("=" * 80)
         lines.append("")
+        lines.append(
+            f"Merge target mode: {merge_target_mode} (branch: {merge_target_branch})"
+        )
         lines.append("✅ APPROVE (no issues found):")
-        lines.append("   1. Rebase WP branch onto base (if merge --ff-only fails):")
+        lines.append(
+            "   1. Rebase WP branch onto merge target (if merge --ff-only fails):"
+        )
         lines.append(f"      {rebase_cmd}")
         lines.append(
             "      If rebase is clean or conflicts are trivial, resolve and continue."
@@ -1561,7 +1615,9 @@ def review(
         lines.append(
             "      If conflicts are complex/non-trivial, REJECT instead (move to planned)."
         )
-        lines.append("   2. Merge approved WP branch into master:")
+        lines.append(
+            f"   2. Merge approved WP branch into {merge_target_branch}:"
+        )
         lines.append(f"      {approve_merge_cmd}")
         lines.append("   3. Mark WP as done:")
         lines.append(
@@ -1615,6 +1671,9 @@ def review(
                 f"🔀 Branch: {review_ctx['branch_name']} (based on {base}, {review_ctx['commit_count']} commits)"
             )
             print(f"   Review diff: git log {base}..HEAD --oneline")
+        print(
+            f"🎯 Merge target: {merge_target_mode} ({merge_target_branch})"
+        )
         print()
         print("▶▶▶ NEXT STEP: Read the full prompt file now:")
         print(f"    cat {prompt_file}")
@@ -1622,7 +1681,7 @@ def review(
         print("After review, run:")
         print("  ✅ 1) Rebase if needed (when ff-only merge fails):")
         print(f"     {rebase_cmd}")
-        print("     2) Merge approved WP branch into master:")
+        print(f"     2) Merge approved WP branch into {merge_target_branch}:")
         print(f"     {approve_merge_cmd}")
         print("     3) Mark WP as done:")
         print(

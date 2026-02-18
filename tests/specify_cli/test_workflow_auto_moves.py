@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import tempfile
 from pathlib import Path
 
 import pytest
@@ -147,3 +148,71 @@ def test_workflow_review_tracks_reviewer_agent(workflow_repo: Path) -> None:
     content = wp_path.read_text(encoding="utf-8")
     frontmatter, _, _ = split_frontmatter(content)
     assert extract_scalar(frontmatter, "agent") == "claude"
+
+
+def test_workflow_review_defaults_to_landing_merge_target(workflow_repo: Path) -> None:
+    """Review workflow should default approval merge target to landing branch."""
+    feature_slug = "001-test-feature"
+    feature_dir = workflow_repo / "kitty-specs" / feature_slug
+    tasks_dir = feature_dir / "tasks"
+    tasks_dir.mkdir(parents=True)
+
+    write_tasks_md(feature_dir, "WP01", ["T001"], done=True)
+    wp_path = tasks_dir / "WP01-test.md"
+    write_wp_file(wp_path, "WP01", lane="for_review")
+
+    # Ensure feature metadata defines distinct landing/upstream branches
+    (feature_dir / "meta.json").write_text(
+        '{"target_branch": "001-test-feature", "upstream_branch": "main"}\n',
+        encoding="utf-8",
+    )
+
+    runner = CliRunner()
+    result = runner.invoke(
+        workflow.app,
+        ["review", "WP01", "--feature", feature_slug, "--agent", "claude"],
+    )
+    assert result.exit_code == 0
+
+    prompt_file = Path(tempfile.gettempdir()) / "spec-kitty-review-WP01.md"
+    prompt_content = prompt_file.read_text(encoding="utf-8")
+
+    assert "Merge target mode: landing (branch: 001-test-feature)" in prompt_content
+
+
+def test_workflow_review_allows_upstream_merge_target(workflow_repo: Path) -> None:
+    """Review workflow should switch approval merge target to upstream when requested."""
+    feature_slug = "001-test-feature"
+    feature_dir = workflow_repo / "kitty-specs" / feature_slug
+    tasks_dir = feature_dir / "tasks"
+    tasks_dir.mkdir(parents=True)
+
+    write_tasks_md(feature_dir, "WP01", ["T001"], done=True)
+    wp_path = tasks_dir / "WP01-test.md"
+    write_wp_file(wp_path, "WP01", lane="for_review")
+
+    (feature_dir / "meta.json").write_text(
+        '{"target_branch": "001-test-feature", "upstream_branch": "main"}\n',
+        encoding="utf-8",
+    )
+
+    runner = CliRunner()
+    result = runner.invoke(
+        workflow.app,
+        [
+            "review",
+            "WP01",
+            "--feature",
+            feature_slug,
+            "--agent",
+            "claude",
+            "--merge-target",
+            "upstream",
+        ],
+    )
+    assert result.exit_code == 0
+
+    prompt_file = Path(tempfile.gettempdir()) / "spec-kitty-review-WP01.md"
+    prompt_content = prompt_file.read_text(encoding="utf-8")
+
+    assert "Merge target mode: upstream (branch: main)" in prompt_content

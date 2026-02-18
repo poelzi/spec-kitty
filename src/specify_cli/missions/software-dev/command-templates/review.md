@@ -12,6 +12,14 @@ Run this command to get the work package prompt and review instructions:
 spec-kitty agent workflow review $ARGUMENTS --agent <your-name>
 ```
 
+Optional: if you explicitly want to merge approved WP branches into upstream instead of the feature landing branch, add:
+
+```bash
+--merge-target upstream
+```
+
+Default merge target is the feature's local landing branch (`--merge-target landing`).
+
 **CRITICAL**: You MUST provide `--agent <your-name>` to track who is reviewing!
 
 If no WP ID is provided, it will automatically find the first work package with `lane: "for_review"` and move it to "doing" for you.
@@ -25,8 +33,8 @@ If no WP ID is provided, it will automatically find the first work package with 
 
 **After reviewing, scroll to the bottom and run ONE of these outcomes**:
 - ✅ Approve:
-  1. Rebase WP branch onto base if `git merge --ff-only` fails (command shown in prompt). If the rebase is clean or conflicts are trivial, resolve them and continue. If conflicts are complex/non-trivial, reject instead.
-  2. Merge approved WP branch to `master` using the command shown in the prompt (uses `git merge --ff-only`).
+  1. Rebase WP branch onto the selected merge target if `git merge --ff-only` fails (command shown in prompt). If the rebase is clean or conflicts are trivial, resolve them and continue. If conflicts are complex/non-trivial, reject instead.
+  2. Merge approved WP branch into the selected merge target branch using the command shown in the prompt (defaults to landing branch unless `--merge-target upstream` is set).
   3. Then mark done: `spec-kitty agent tasks move-task WP## --to done --note "Review passed: <summary>"`
 - ❌ Reject: Write feedback to the temp file path shown in the prompt, then run `spec-kitty agent tasks move-task WP## --to planned --review-feedback-file <temp-file-path>`
 
@@ -36,4 +44,4 @@ If no WP ID is provided, it will automatically find the first work package with 
 
 **The Python script handles all file updates automatically - no manual editing required!**
 
-**If the WP got approved, merging to `master` is required before moving to `done`, then ensure dependent WPs are rebased as needed.**
+**If the WP got approved, merging to the selected merge target is required before moving to `done`, then ensure dependent WPs are rebased as needed.**
