@@ -23,7 +23,6 @@ from specify_cli.core.vcs import (
     VCSLockError,
 )
 from specify_cli.frontmatter import read_frontmatter, update_fields
-from specify_cli.git import safe_commit
 from specify_cli.tasks_support import (
     TaskCliError,
     find_repo_root,
@@ -38,6 +37,8 @@ from specify_cli.core.feature_detection import (
     detect_feature,
     FeatureDetectionError,
 )
+from specify_cli.core.git_ops import get_current_branch, resolve_target_branch
+from specify_cli.git import safe_commit
 
 console = Console()
 
@@ -168,8 +169,6 @@ def check_base_branch_changed(workspace_path: Path, base_branch: str) -> bool:
             cwd=workspace_path,
             capture_output=True,
             text=True,
-            encoding="utf-8",
-            errors="replace",
             check=False,
         )
         if result.returncode != 0:
@@ -184,8 +183,6 @@ def check_base_branch_changed(workspace_path: Path, base_branch: str) -> bool:
             cwd=workspace_path,
             capture_output=True,
             text=True,
-            encoding="utf-8",
-            errors="replace",
             check=False,
         )
         if result.returncode != 0:
@@ -202,15 +199,26 @@ def check_base_branch_changed(workspace_path: Path, base_branch: str) -> bool:
 
 
 def resolve_primary_branch(repo_root: Path) -> str:
-    """Resolve the primary branch name (main, master, etc.).
-
-    Delegates to the centralized implementation in core.git_ops.
+    """Resolve the primary branch name (main or master).
 
     Returns:
-        Detected primary branch name.
+        "main" if it exists, otherwise "master" if it exists.
+
+    Raises:
+        typer.Exit: If neither branch exists.
     """
-    from specify_cli.core.git_ops import resolve_primary_branch as _resolve
-    return _resolve(repo_root)
+    for candidate in ("main", "master"):
+        result = subprocess.run(
+            ["git", "rev-parse", "--verify", candidate],
+            cwd=repo_root,
+            capture_output=True,
+            check=False,
+        )
+        if result.returncode == 0:
+            return candidate
+
+    console.print("[red]Error:[/red] Neither 'main' nor 'master' branch exists.")
+    raise typer.Exit(1)
 
 
 def display_rebase_warning(
@@ -318,8 +326,6 @@ def _ensure_planning_artifacts_committed_git(
         cwd=repo_root,
         capture_output=True,
         text=True,
-        encoding="utf-8",
-        errors="replace",
         check=False
     )
     current_branch = result.stdout.strip() if result.returncode == 0 else ""
@@ -330,8 +336,6 @@ def _ensure_planning_artifacts_committed_git(
         cwd=repo_root,
         capture_output=True,
         text=True,
-        encoding="utf-8",
-        errors="replace",
         check=False
     )
 
@@ -371,8 +375,6 @@ def _ensure_planning_artifacts_committed_git(
                 cwd=repo_root,
                 capture_output=True,
                 text=True,
-                encoding="utf-8",
-                errors="replace",
                 check=False
             )
             if result.returncode != 0:
@@ -387,8 +389,6 @@ def _ensure_planning_artifacts_committed_git(
                 cwd=repo_root,
                 capture_output=True,
                 text=True,
-                encoding="utf-8",
-                errors="replace",
                 check=False
             )
             if result.returncode != 0:
@@ -439,8 +439,6 @@ def _ensure_planning_artifacts_committed_jj(
         cwd=repo_root,
         capture_output=True,
         text=True,
-        encoding="utf-8",
-        errors="replace",
         check=False
     )
     current_bookmark = result.stdout.strip() if result.returncode == 0 else "unknown"
@@ -799,13 +797,22 @@ def implement(
             base_branch = merge_result.branch_name
 
         elif base is None:
-            # No dependencies - branch from current branch (respects user context)
-            from specify_cli.core.git_ops import get_current_branch
+            # No dependencies - ensure landing branch model is initialized,
+            # then branch workspace from current branch (respects user context).
+            from specify_cli.core.feature_detection import ensure_landing_branch
 
-            # Get user's current branch
+            landing_branch: str | None = None
+            try:
+                landing_branch = ensure_landing_branch(repo_root, feature_slug)
+                console.print(f"[cyan]→ Using landing branch: {landing_branch}[/cyan]")
+            except RuntimeError as e:
+                console.print(f"[yellow]Warning:[/yellow] {e}")
+
             current_branch_name = get_current_branch(repo_root)
             if current_branch_name is None:
-                raise RuntimeError("Could not determine current branch")
+                if landing_branch is None:
+                    raise RuntimeError("Could not determine current branch")
+                current_branch_name = landing_branch
 
             # Use current branch as base (no auto-checkout to target)
             base_branch = current_branch_name
@@ -899,8 +906,6 @@ def implement(
             cwd=repo_root,
             capture_output=True,
             text=True,
-            encoding="utf-8",
-            errors="replace",
             check=False
         )
         base_commit_sha = result.stdout.strip() if result.returncode == 0 else "unknown"
@@ -951,7 +956,7 @@ def implement(
         console.print(tracker.render())
         raise
 
-    # Step 4: Update WP lane to "doing" and auto-commit to target branch
+    # Step 4: Update WP lane to "doing" and auto-commit to current branch
     # This enables multi-agent synchronization - all agents see the claim immediately
     try:
         import os
@@ -972,7 +977,6 @@ def implement(
             updated_doc = build_document(updated_front, wp.body, wp.padding)
 
             # Auto-commit to current branch (respects user context, no auto-checkout)
-            from specify_cli.core.git_ops import resolve_target_branch
             commit_msg = f"chore: {wp_id} claimed for implementation"
 
             # Resolve branch routing (unified logic, no auto-checkout)
@@ -986,7 +990,7 @@ def implement(
                     f"Status will commit to '{resolution.current}'."
                 )
 
-            # Commit to current branch (no checkout)
+            # Write updated document
             wp.path.write_text(updated_doc, encoding="utf-8")
 
             # Commit only the WP file (safe_commit preserves staging area)
@@ -998,7 +1002,9 @@ def implement(
             )
 
             if commit_success:
-                console.print(f"[cyan]→ {wp_id} moved to 'doing' (committed to {resolution.current})[/cyan]")
+                console.print(
+                    f"[cyan]→ {wp_id} moved to 'doing' (committed to {resolution.current})[/cyan]"
+                )
             else:
                 # Commit failed - file might be unchanged or other issue
                 console.print(f"[yellow]Warning:[/yellow] Could not auto-commit lane change")
@@ -1016,7 +1022,7 @@ def implement(
             "branch": branch_name,
             "feature": feature_slug,
             "wp_id": wp_id,
-            "base": base or resolve_primary_branch(repo_root),
+            "base": base or base_branch,
             "status": "created"
         }))
     else:

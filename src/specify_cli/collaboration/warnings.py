@@ -9,6 +9,23 @@ from specify_cli.spec_kitty_events.models import Event
 from datetime import datetime
 
 
+def _safe_project_uuid(run_id: str | None):
+    import uuid
+
+    if run_id:
+        try:
+            return uuid.UUID(run_id)
+        except ValueError:
+            pass
+    return uuid.uuid4()
+
+
+def _safe_correlation_id(run_id: str | None) -> str:
+    if run_id and len(run_id) >= 26:
+        return run_id
+    return generate_event_id()
+
+
 def _to_focus_target(focus: str | None) -> dict | None:
     """
     Convert focus string to FocusTarget dict.
@@ -76,7 +93,6 @@ def detect_collision(mission_id: str, focus: str | None, node_id: str = "cli-loc
 
         # Emit warning event
         clock = LamportClock(node_id)
-        import uuid
         event = Event(
             event_id=generate_event_id(),
             event_type=collision_type,
@@ -92,9 +108,9 @@ def detect_collision(mission_id: str, focus: str | None, node_id: str = "cli-loc
             node_id=node_id,
             lamport_clock=clock.increment(),
             causation_id=None,
-            project_uuid=uuid.UUID(self_state.mission_run_id) if self_state.mission_run_id else uuid.uuid4(),
+            project_uuid=_safe_project_uuid(self_state.mission_run_id),
             project_slug=mission_id,
-            correlation_id=self_state.mission_run_id or generate_event_id(),
+            correlation_id=_safe_correlation_id(self_state.mission_run_id),
             schema_version="1.0.0",
             data_tier=0,
         )

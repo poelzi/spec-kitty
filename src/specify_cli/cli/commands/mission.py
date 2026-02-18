@@ -519,6 +519,17 @@ def comment_command(text: str | None = None, mission_id: str | None = None) -> N
         # Emit CommentPosted event
         clock = LamportClock("cli-local")
         import uuid
+        try:
+            project_uuid = (
+                uuid.UUID(state.mission_run_id) if state.mission_run_id else uuid.uuid4()
+            )
+        except ValueError:
+            project_uuid = uuid.uuid4()
+        correlation_id = (
+            state.mission_run_id
+            if state.mission_run_id and len(state.mission_run_id) >= 26
+            else generate_event_id()
+        )
         event = Event(
             event_id=comment_id,
             event_type="CommentPosted",
@@ -533,9 +544,9 @@ def comment_command(text: str | None = None, mission_id: str | None = None) -> N
             timestamp=datetime.now().isoformat(),
             node_id="cli-local",
             lamport_clock=clock.increment(),
-            correlation_id=state.mission_run_id,
+            correlation_id=correlation_id,
             causation_id=None,
-            project_uuid=uuid.UUID(state.mission_run_id) if state.mission_run_id else uuid.uuid4(),
+            project_uuid=project_uuid,
             project_slug=resolved_mission_id,
             schema_version="1.0.0",
             data_tier=0,
@@ -576,6 +587,17 @@ def decide_command(text: str | None = None, mission_id: str | None = None) -> No
         # Emit DecisionCaptured event
         clock = LamportClock("cli-local")
         import uuid
+        try:
+            project_uuid = (
+                uuid.UUID(state.mission_run_id) if state.mission_run_id else uuid.uuid4()
+            )
+        except ValueError:
+            project_uuid = uuid.uuid4()
+        correlation_id = (
+            state.mission_run_id
+            if state.mission_run_id and len(state.mission_run_id) >= 26
+            else generate_event_id()
+        )
         event = Event(
             event_id=decision_id,
             event_type="DecisionCaptured",
@@ -592,9 +614,9 @@ def decide_command(text: str | None = None, mission_id: str | None = None) -> No
             timestamp=datetime.now().isoformat(),
             node_id="cli-local",
             lamport_clock=clock.increment(),
-            correlation_id=state.mission_run_id,
+            correlation_id=correlation_id,
             causation_id=None,
-            project_uuid=uuid.UUID(state.mission_run_id) if state.mission_run_id else uuid.uuid4(),
+            project_uuid=project_uuid,
             project_slug=resolved_mission_id,
             schema_version="1.0.0",
             data_tier=0,

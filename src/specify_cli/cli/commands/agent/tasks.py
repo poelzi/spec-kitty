@@ -7,33 +7,49 @@ import re
 import subprocess
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Optional, Tuple, List
+from typing import List, Optional, Tuple
 
 import typer
 from rich.console import Console
 from typing_extensions import Annotated
 
 from specify_cli.core.dependency_graph import build_dependency_graph, get_dependents
-from specify_cli.core.paths import locate_project_root, get_main_repo_root, is_worktree_context
 from specify_cli.core.feature_detection import (
-    detect_feature_slug,
-    get_feature_target_branch,
     FeatureDetectionError,
+    detect_feature_slug,
 )
-from specify_cli.mission_system import get_feature_mission_key
-from specify_cli.git import safe_commit
+from specify_cli.core.paths import (
+    get_main_repo_root,
+    is_worktree_context,
+    locate_project_root,
+)
+from specify_cli.mission import get_feature_mission_key
 
 
 def resolve_primary_branch(repo_root: Path) -> str:
-    """Resolve the primary branch name (main, master, etc.).
-
-    Delegates to the centralized implementation in core.git_ops.
+    """Resolve the primary branch name (main or master).
 
     Returns:
-        Detected primary branch name.
+        "main" if it exists, otherwise "master" if it exists.
+
+    Raises:
+        typer.Exit: If neither branch exists.
     """
-    from specify_cli.core.git_ops import resolve_primary_branch as _resolve
-    return _resolve(repo_root)
+    for candidate in ("main", "master"):
+        result = subprocess.run(
+            ["git", "rev-parse", "--verify", candidate],
+            cwd=repo_root,
+            capture_output=True,
+            check=False,
+        )
+        if result.returncode == 0:
+            return candidate
+    # Neither exists
+    console = Console()
+    console.print("[red]Error:[/red] Could not find main or master branch")
+    raise typer.Exit(1)
+
+
 from specify_cli.tasks_support import (
     LANES,
     WorkPackage,
@@ -48,9 +64,7 @@ from specify_cli.tasks_support import (
 )
 
 app = typer.Typer(
-    name="tasks",
-    help="Task workflow commands for AI agents",
-    no_args_is_help=True
+    name="tasks", help="Task workflow commands for AI agents", no_args_is_help=True
 )
 
 console = Console()
@@ -61,35 +75,52 @@ def _ensure_target_branch_checked_out(
     feature_slug: str,
     json_output: bool,
 ) -> tuple[Path, str]:
-    """Resolve branch context without auto-checkout (respects user's current branch).
+    """Resolve branch for planning changes without auto-checkout.
 
     Returns:
-        (main_repo_root, current_branch)
+        (main_repo_root, commit_branch)
     """
-    from specify_cli.core.git_ops import resolve_target_branch
-
-    from specify_cli.core.git_ops import get_current_branch
-
     main_repo_root = get_main_repo_root(repo_root)
 
-    # Check for detached HEAD
-    current_branch = get_current_branch(main_repo_root)
-    if current_branch is None:
-        raise RuntimeError("Planning repo is in detached HEAD state; checkout a branch before continuing")
+    current_branch_result = subprocess.run(
+        ["git", "rev-parse", "--abbrev-ref", "HEAD"],
+        cwd=main_repo_root,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if current_branch_result.returncode != 0:
+        raise RuntimeError("Could not determine current branch for planning repo")
 
-    # Resolve branch routing (unified logic, no auto-checkout)
-    resolution = resolve_target_branch(feature_slug, main_repo_root, current_branch, respect_current=True)
-
-    # Show notification if branches differ
-    if resolution.should_notify and not json_output:
-        console.print(
-            f"[yellow]Note:[/yellow] You are on '{resolution.current}', "
-            f"feature targets '{resolution.target}'. "
-            f"Operations will use '{resolution.current}'."
+    current_branch = current_branch_result.stdout.strip()
+    if current_branch == "HEAD":
+        raise RuntimeError(
+            "Planning repo is in detached HEAD state; checkout a branch before continuing"
         )
 
-    # Return current branch (no checkout performed)
-    return main_repo_root, resolution.current
+    # Prefer explicit upstream_branch in meta.json for planning artifacts,
+    # falling back to target_branch for legacy features, then current branch.
+    # Planning artifacts (kitty-specs/) must stay on the upstream branch (e.g., main),
+    # NOT on the landing branch (which is target_branch in v0.15.0+).
+    planning_branch = None
+    meta_file = main_repo_root / "kitty-specs" / feature_slug / "meta.json"
+    if meta_file.exists():
+        try:
+            meta = json.loads(meta_file.read_text(encoding="utf-8"))
+            # Use upstream_branch for planning (v0.15.0+), fall back to target_branch for legacy
+            planning_branch = meta.get("upstream_branch") or meta.get("target_branch")
+        except (json.JSONDecodeError, OSError):
+            planning_branch = None
+
+    target_branch = planning_branch or current_branch
+
+    if current_branch != target_branch and not json_output:
+        console.print(
+            f"[yellow]Note:[/yellow] You are on '{current_branch}', feature planning branch is "
+            f"'{target_branch}'. Status changes will commit to '{current_branch}'."
+        )
+
+    return main_repo_root, current_branch
 
 
 def _find_feature_slug(explicit_feature: str | None = None) -> str:
@@ -112,17 +143,14 @@ def _find_feature_slug(explicit_feature: str | None = None) -> str:
 
     try:
         return detect_feature_slug(
-            repo_root,
-            explicit_feature=explicit_feature,
-            cwd=cwd,
-            mode="strict"
+            repo_root, explicit_feature=explicit_feature, cwd=cwd, mode="strict"
         )
     except FeatureDetectionError as e:
         console.print(f"[red]Error:[/red] {e}")
         raise typer.Exit(1)
 
 
-def _output_result(json_mode: bool, data: dict, success_message: str = None):
+def _output_result(json_mode: bool, data: dict, success_message: Optional[str] = None):
     """Output result in JSON or human-readable format.
 
     Args:
@@ -149,11 +177,121 @@ def _output_error(json_mode: bool, error_message: str):
         console.print(f"[red]Error:[/red] {error_message}")
 
 
+def _detect_reviewer_name() -> str:
+    """Detect reviewer name from git config, with safe fallback."""
+    try:
+        result = subprocess.run(
+            ["git", "config", "user.name"],
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+        return result.stdout.strip() or "unknown"
+    except (subprocess.CalledProcessError, FileNotFoundError):
+        return "unknown"
+
+
+def _resolve_review_feedback_path(path: Path) -> Path:
+    """Resolve and validate a review feedback file path."""
+    resolved = path.expanduser()
+    if not resolved.is_absolute():
+        resolved = (Path.cwd() / resolved).resolve()
+    else:
+        resolved = resolved.resolve()
+
+    if not resolved.exists():
+        raise FileNotFoundError(f"Review feedback file not found: {resolved}")
+    if not resolved.is_file():
+        raise IsADirectoryError(f"Review feedback path is not a file: {resolved}")
+    return resolved
+
+
+def _find_review_feedback_section_bounds(body: str) -> tuple[int, int, int] | None:
+    """Return (section_start, content_start, section_end) for Review Feedback."""
+    section_pattern = re.compile(r"^##\s+Review Feedback\s*$", flags=re.MULTILINE)
+    section_match = section_pattern.search(body)
+
+    if section_match is None:
+        return None
+
+    content_start = section_match.end()
+    next_section_match = re.search(r"^##\s+", body[content_start:], flags=re.MULTILINE)
+    if next_section_match is None:
+        section_end = len(body)
+    else:
+        section_end = content_start + next_section_match.start()
+
+    return section_match.start(), content_start, section_end
+
+
+def _upsert_review_feedback_section(body: str, feedback_block: str) -> str:
+    """Insert or append an entry to the Review Feedback section in a WP body."""
+    bounds = _find_review_feedback_section_bounds(body)
+
+    normalized_block = feedback_block.strip()
+    replacement = f"## Review Feedback\n\n{normalized_block}\n\n"
+
+    if bounds is None:
+        base = body.rstrip("\n")
+        if base:
+            return f"{base}\n\n{replacement}"
+        return replacement
+
+    section_start, content_start, section_end = bounds
+    existing_section = body[content_start:section_end].strip()
+
+    if normalized_block in existing_section:
+        combined_section = existing_section
+    elif existing_section:
+        combined_section = f"{existing_section}\n\n---\n\n{normalized_block}"
+    else:
+        combined_section = normalized_block
+
+    updated_section = f"## Review Feedback\n\n{combined_section}\n\n"
+    return body[:section_start] + updated_section + body[section_end:]
+
+
+def _mark_review_feedback_done_comments(body: str, actor: str, timestamp: str) -> str:
+    """Mark unresolved review checklist items as done with a comment."""
+    bounds = _find_review_feedback_section_bounds(body)
+    if bounds is None:
+        return body
+
+    section_start, content_start, section_end = bounds
+    section_content = body[content_start:section_end]
+    lines = section_content.splitlines()
+
+    done_comment = f"<!-- done: addressed by {actor} at {timestamp} -->"
+    checkbox_pattern = re.compile(r"^(\s*[-*]\s*)\[\s*\]\s+(.*)$")
+
+    updated_lines: list[str] = []
+    marked_count = 0
+    for line in lines:
+        match = checkbox_pattern.match(line)
+        if match:
+            item_text = match.group(2).rstrip()
+            if done_comment not in item_text:
+                item_text = f"{item_text} {done_comment}"
+            updated_lines.append(f"{match.group(1)}[x] {item_text}")
+            marked_count += 1
+            continue
+        updated_lines.append(line)
+
+    if marked_count == 0:
+        summary_comment = f"- [x] DONE: Feedback addressed by {actor}. {done_comment}"
+        if summary_comment not in section_content:
+            if updated_lines and updated_lines[-1].strip():
+                updated_lines.append("")
+            updated_lines.append(summary_comment)
+
+    updated_content = "\n".join(updated_lines).strip()
+    updated_section = f"## Review Feedback\n\n{updated_content}\n\n"
+
+    return body[:section_start] + updated_section + body[section_end:]
+
+
 def _check_unchecked_subtasks(
-    repo_root: Path,
-    feature_slug: str,
-    wp_id: str,
-    force: bool
+    repo_root: Path, feature_slug: str, wp_id: str, force: bool
 ) -> list[str]:
     """Check for unchecked subtasks in tasks.md for a given WP.
 
@@ -180,37 +318,37 @@ def _check_unchecked_subtasks(
     content = tasks_md.read_text(encoding="utf-8")
 
     # Find subtasks for this WP (looking for - [ ] or - [x] checkboxes under WP section)
-    lines = content.split('\n')
+    lines = content.split("\n")
     unchecked = []
     in_wp_section = False
 
     for line in lines:
         # Check if we entered this WP's section
-        if re.search(rf'##.*{wp_id}\b', line):
+        if re.search(rf"##.*{wp_id}\b", line):
             in_wp_section = True
             continue
 
         # Check if we entered a different WP section
-        if in_wp_section and re.search(r'##.*WP\d{2}\b', line):
+        if in_wp_section and re.search(r"##.*WP\d{2}\b", line):
             break  # Left this WP's section
 
         # Look for unchecked tasks in this WP's section
         if in_wp_section:
             # Match patterns like: - [ ] T001 or - [ ] Task description
-            unchecked_match = re.match(r'-\s*\[\s*\]\s*(T\d{3}|.*)', line.strip())
+            unchecked_match = re.match(r"-\s*\[\s*\]\s*(T\d{3}|.*)", line.strip())
             if unchecked_match:
-                task_id = unchecked_match.group(1).split()[0] if unchecked_match.group(1) else line.strip()
+                task_id = (
+                    unchecked_match.group(1).split()[0]
+                    if unchecked_match.group(1)
+                    else line.strip()
+                )
                 unchecked.append(task_id)
 
     return unchecked
 
 
 def _check_dependent_warnings(
-    repo_root: Path,
-    feature_slug: str,
-    wp_id: str,
-    target_lane: str,
-    json_mode: bool
+    repo_root: Path, feature_slug: str, wp_id: str, target_lane: str, json_mode: bool
 ) -> None:
     """Display warning when WP moves to for_review and has incomplete dependents.
 
@@ -273,15 +411,14 @@ def _check_dependent_warnings(
         console.print("  1. Notify dependent WP agents")
         console.print("  2. Dependent WPs will need manual rebase after changes")
         for dep in incomplete:
-            console.print(f"     cd .worktrees/{feature_slug}-{dep} && git rebase {feature_slug}-{wp_id}")
+            console.print(
+                f"     cd .worktrees/{feature_slug}-{dep} && git rebase {feature_slug}-{wp_id}"
+            )
         console.print()
 
 
 def _validate_ready_for_review(
-    repo_root: Path,
-    feature_slug: str,
-    wp_id: str,
-    force: bool
+    repo_root: Path, feature_slug: str, wp_id: str, force: bool
 ) -> Tuple[bool, List[str]]:
     """Validate that WP is ready for review by checking for uncommitted changes.
 
@@ -317,9 +454,7 @@ def _validate_ready_for_review(
         cwd=main_repo_root,
         capture_output=True,
         text=True,
-        encoding="utf-8",
-        errors="replace",
-        check=False
+        check=False,
     )
     uncommitted_in_main = result.stdout.strip()
 
@@ -350,11 +485,17 @@ def _validate_ready_for_review(
             guidance.append(f"  cd {main_repo_root}")
             guidance.append(f"  git add kitty-specs/{feature_slug}/")
             if mission_key == "research":
-                guidance.append(f"  git commit -m \"research({wp_id}): <describe your research outputs>\"")
+                guidance.append(
+                    f'  git commit -m "research({wp_id}): <describe your research outputs>"'
+                )
             else:
-                guidance.append(f"  git commit -m \"docs({wp_id}): <describe your changes>\"")
+                guidance.append(
+                    f'  git commit -m "docs({wp_id}): <describe your changes>"'
+                )
             guidance.append("")
-            guidance.append(f"Then retry: spec-kitty agent tasks move-task {wp_id} --to for_review")
+            guidance.append(
+                f"Then retry: spec-kitty agent tasks move-task {wp_id} --to for_review"
+            )
             return False, guidance
 
     # Check 2: For software-dev missions, check worktree for implementation commits
@@ -363,16 +504,23 @@ def _validate_ready_for_review(
 
         if worktree_path.exists():
             # Check for detached HEAD before other git status checks
-            from specify_cli.core.git_ops import get_current_branch
-            wt_branch = get_current_branch(worktree_path)
-            if wt_branch is None:
+            result = subprocess.run(
+                ["git", "rev-parse", "--abbrev-ref", "HEAD"],
+                cwd=worktree_path,
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            if result.returncode == 0 and result.stdout.strip() == "HEAD":
                 guidance.append("Detached HEAD detected in worktree!")
                 guidance.append("")
                 guidance.append("Please reattach to a branch before review:")
                 guidance.append(f"  cd {worktree_path}")
                 guidance.append("  git checkout <your-branch>")
                 guidance.append("")
-                guidance.append(f"Then retry: spec-kitty agent tasks move-task {wp_id} --to for_review")
+                guidance.append(
+                    f"Then retry: spec-kitty agent tasks move-task {wp_id} --to for_review"
+                )
                 return False, guidance
 
             # Check for in-progress git operations (merge/rebase/cherry-pick)
@@ -388,9 +536,7 @@ def _validate_ready_for_review(
                     cwd=worktree_path,
                     capture_output=True,
                     text=True,
-                    encoding="utf-8",
-                    errors="replace",
-                    check=False
+                    check=False,
                 )
                 if state_result.returncode == 0:
                     in_progress.append(label)
@@ -407,13 +553,16 @@ def _validate_ready_for_review(
                 guidance.append("  git rebase --abort  # if rebase")
                 guidance.append("  git cherry-pick --abort  # if cherry-pick")
                 guidance.append("")
-                guidance.append(f"Then retry: spec-kitty agent tasks move-task {wp_id} --to for_review")
+                guidance.append(
+                    f"Then retry: spec-kitty agent tasks move-task {wp_id} --to for_review"
+                )
                 return False, guidance
 
             # Check if worktree branch is behind its base branch
             # For stacked WPs (WP03 based on WP01), check against WP01's branch, not main
             from specify_cli.core.feature_detection import get_feature_target_branch
             from specify_cli.workspace_context import load_context
+
             target_branch = get_feature_target_branch(repo_root, feature_slug)
 
             # Resolve actual base: workspace context tracks the real base branch
@@ -426,9 +575,7 @@ def _validate_ready_for_review(
                 cwd=worktree_path,
                 capture_output=True,
                 text=True,
-                encoding="utf-8",
-                errors="replace",
-                check=False
+                check=False,
             )
             behind_count = 0
             if result.returncode == 0 and result.stdout.strip():
@@ -438,14 +585,20 @@ def _validate_ready_for_review(
                     behind_count = 0
 
             if behind_count > 0:
-                guidance.append(f"{check_branch} branch has new commits not in this worktree!")
+                guidance.append(
+                    f"{check_branch} branch has new commits not in this worktree!"
+                )
                 guidance.append("")
-                guidance.append(f"Your branch is behind {check_branch} by {behind_count} commit(s).")
+                guidance.append(
+                    f"Your branch is behind {check_branch} by {behind_count} commit(s)."
+                )
                 guidance.append("Rebase before review:")
                 guidance.append(f"  cd {worktree_path}")
                 guidance.append(f"  git rebase {check_branch}")
                 guidance.append("")
-                guidance.append(f"Then retry: spec-kitty agent tasks move-task {wp_id} --to for_review")
+                guidance.append(
+                    f"Then retry: spec-kitty agent tasks move-task {wp_id} --to for_review"
+                )
                 return False, guidance
 
             # Check for uncommitted changes in worktree
@@ -454,9 +607,7 @@ def _validate_ready_for_review(
                 cwd=worktree_path,
                 capture_output=True,
                 text=True,
-                encoding="utf-8",
-                errors="replace",
-                check=False
+                check=False,
             )
             uncommitted_in_worktree = result.stdout.strip()
 
@@ -489,9 +640,13 @@ def _validate_ready_for_review(
                 guidance.append("Commit your work first:")
                 guidance.append(f"  cd {worktree_path}")
                 guidance.append("  git add -A")
-                guidance.append(f"  git commit -m \"feat({wp_id}): <describe implementation>\"")
+                guidance.append(
+                    f'  git commit -m "feat({wp_id}): <describe implementation>"'
+                )
                 guidance.append("")
-                guidance.append(f"Then retry: spec-kitty agent tasks move-task {wp_id} --to for_review")
+                guidance.append(
+                    f"Then retry: spec-kitty agent tasks move-task {wp_id} --to for_review"
+                )
                 return False, guidance
 
             # Check if branch has commits beyond base (use actual base, not target)
@@ -500,9 +655,7 @@ def _validate_ready_for_review(
                 cwd=worktree_path,
                 capture_output=True,
                 text=True,
-                encoding="utf-8",
-                errors="replace",
-                check=False
+                check=False,
             )
             commit_count = 0
             if result.returncode == 0 and result.stdout.strip():
@@ -514,16 +667,24 @@ def _validate_ready_for_review(
             if commit_count == 0:
                 guidance.append("No implementation commits on WP branch!")
                 guidance.append("")
-                guidance.append(f"The worktree exists but has no commits beyond {check_branch}.")
+                guidance.append(
+                    f"The worktree exists but has no commits beyond {check_branch}."
+                )
                 guidance.append("Either:")
                 guidance.append("  1. Commit your implementation work to the worktree")
-                guidance.append("  2. Or verify work is complete (use --force if nothing to commit)")
+                guidance.append(
+                    "  2. Or verify work is complete (use --force if nothing to commit)"
+                )
                 guidance.append("")
                 guidance.append(f"  cd {worktree_path}")
                 guidance.append("  git add -A")
-                guidance.append(f"  git commit -m \"feat({wp_id}): <describe implementation>\"")
+                guidance.append(
+                    f'  git commit -m "feat({wp_id}): <describe implementation>"'
+                )
                 guidance.append("")
-                guidance.append(f"Then retry: spec-kitty agent tasks move-task {wp_id} --to for_review")
+                guidance.append(
+                    f"Then retry: spec-kitty agent tasks move-task {wp_id} --to for_review"
+                )
                 return False, guidance
 
     return True, []
@@ -532,17 +693,54 @@ def _validate_ready_for_review(
 @app.command(name="move-task")
 def move_task(
     task_id: Annotated[str, typer.Argument(help="Task ID (e.g., WP01)")],
-    to: Annotated[str, typer.Option("--to", help="Target lane (planned/doing/for_review/done)")],
-    feature: Annotated[Optional[str], typer.Option("--feature", help="Feature slug (auto-detected if omitted)")] = None,
+    to: Annotated[
+        str, typer.Option("--to", help="Target lane (planned/doing/for_review/done)")
+    ],
+    feature: Annotated[
+        Optional[str],
+        typer.Option("--feature", help="Feature slug (auto-detected if omitted)"),
+    ] = None,
     agent: Annotated[Optional[str], typer.Option("--agent", help="Agent name")] = None,
-    assignee: Annotated[Optional[str], typer.Option("--assignee", help="Assignee name (sets assignee when moving to doing)")] = None,
-    shell_pid: Annotated[Optional[str], typer.Option("--shell-pid", help="Shell PID")] = None,
+    assignee: Annotated[
+        Optional[str],
+        typer.Option(
+            "--assignee", help="Assignee name (sets assignee when moving to doing)"
+        ),
+    ] = None,
+    shell_pid: Annotated[
+        Optional[str], typer.Option("--shell-pid", help="Shell PID")
+    ] = None,
     note: Annotated[Optional[str], typer.Option("--note", help="History note")] = None,
-    review_feedback_file: Annotated[Optional[Path], typer.Option("--review-feedback-file", help="Path to review feedback file (required when moving to planned from review)")] = None,
-    reviewer: Annotated[Optional[str], typer.Option("--reviewer", help="Reviewer name (auto-detected from git if omitted)")] = None,
-    force: Annotated[bool, typer.Option("--force", help="Force move even with unchecked subtasks or missing feedback")] = False,
-    auto_commit: Annotated[bool, typer.Option("--auto-commit/--no-auto-commit", help="Automatically commit WP file changes to target branch")] = True,
-    json_output: Annotated[bool, typer.Option("--json", help="Output JSON format")] = False,
+    review_feedback_file: Annotated[
+        Optional[Path],
+        typer.Option(
+            "--review-feedback-file",
+            help="Path to review feedback file (required when moving to planned from review)",
+        ),
+    ] = None,
+    reviewer: Annotated[
+        Optional[str],
+        typer.Option(
+            "--reviewer", help="Reviewer name (auto-detected from git if omitted)"
+        ),
+    ] = None,
+    force: Annotated[
+        bool,
+        typer.Option(
+            "--force",
+            help="Force move even with unchecked subtasks or missing feedback",
+        ),
+    ] = False,
+    auto_commit: Annotated[
+        bool,
+        typer.Option(
+            "--auto-commit/--no-auto-commit",
+            help="Automatically commit WP file changes to target branch",
+        ),
+    ] = True,
+    json_output: Annotated[
+        bool, typer.Option("--json", help="Output JSON format")
+    ] = False,
 ) -> None:
     """Move task between lanes (planned → doing → for_review → done).
 
@@ -565,7 +763,9 @@ def move_task(
         feature_slug = _find_feature_slug(explicit_feature=feature)
 
         # Ensure we operate on the target branch for this feature
-        main_repo_root, target_branch = _ensure_target_branch_checked_out(repo_root, feature_slug, json_output)
+        main_repo_root, target_branch = _ensure_target_branch_checked_out(
+            repo_root, feature_slug, json_output
+        )
 
         # Informational: Let user know we're using planning repo's kitty-specs
         cwd = Path.cwd().resolve()
@@ -580,7 +780,10 @@ def move_task(
                         break
                     current = current.parent
 
-                if worktree_kitty and (worktree_kitty / feature_slug / "tasks").exists():
+                if (
+                    worktree_kitty
+                    and (worktree_kitty / feature_slug / "tasks").exists()
+                ):
                     console.print(
                         f"[dim]Note: Using planning repo's kitty-specs/ on {target_branch} (worktree copy ignored)[/dim]"
                     )
@@ -588,6 +791,17 @@ def move_task(
         # Load work package first (needed for current_lane check)
         wp = locate_work_package(repo_root, feature_slug, task_id)
         old_lane = wp.current_lane
+        current_review_status = extract_scalar(wp.frontmatter, "review_status") or ""
+
+        resolved_review_feedback_file: Optional[Path] = None
+        if review_feedback_file is not None:
+            try:
+                resolved_review_feedback_file = _resolve_review_feedback_path(
+                    review_feedback_file
+                )
+            except (FileNotFoundError, IsADirectoryError) as exc:
+                _output_error(json_output, str(exc))
+                raise typer.Exit(1)
 
         # AGENT OWNERSHIP CHECK: Warn if agent doesn't match WP's current agent
         # This helps prevent agents from accidentally modifying WPs they don't own
@@ -596,17 +810,31 @@ def move_task(
             if not json_output:
                 console.print()
                 console.print("[bold red]⚠️  AGENT OWNERSHIP WARNING[/bold red]")
-                console.print(f"   {task_id} is currently assigned to: [cyan]{current_agent}[/cyan]")
-                console.print(f"   You are trying to move it as: [yellow]{agent}[/yellow]")
+                console.print(
+                    f"   {task_id} is currently assigned to: [cyan]{current_agent}[/cyan]"
+                )
+                console.print(
+                    f"   You are trying to move it as: [yellow]{agent}[/yellow]"
+                )
                 console.print()
-                console.print("   If you are the correct agent, use --force to override.")
+                console.print(
+                    "   If you are the correct agent, use --force to override."
+                )
                 console.print("   If not, you may be modifying the wrong WP!")
                 console.print()
-            _output_error(json_output, f"Agent mismatch: {task_id} is assigned to '{current_agent}', not '{agent}'. Use --force to override.")
+            _output_error(
+                json_output,
+                f"Agent mismatch: {task_id} is assigned to '{current_agent}', not '{agent}'. Use --force to override.",
+            )
             raise typer.Exit(1)
 
         # Validate review feedback when moving to planned (likely from review)
-        if target_lane == "planned" and old_lane == "for_review" and not review_feedback_file and not force:
+        if (
+            target_lane == "planned"
+            and old_lane == "for_review"
+            and not resolved_review_feedback_file
+            and not force
+        ):
             error_msg = f"❌ Moving {task_id} from 'for_review' to 'planned' requires review feedback.\n\n"
             error_msg += "Please provide feedback:\n"
             error_msg += "  1. Create feedback file: echo '**Issue**: Description' > feedback.md\n"
@@ -617,14 +845,18 @@ def move_task(
 
         # Validate subtasks are complete when moving to for_review or done (Issue #72)
         if target_lane in ("for_review", "done") and not force:
-            unchecked = _check_unchecked_subtasks(repo_root, feature_slug, task_id, force)
+            unchecked = _check_unchecked_subtasks(
+                repo_root, feature_slug, task_id, force
+            )
             if unchecked:
-                error_msg = f"Cannot move {task_id} to {target_lane} - unchecked subtasks:\n"
+                error_msg = (
+                    f"Cannot move {task_id} to {target_lane} - unchecked subtasks:\n"
+                )
                 for task in unchecked:
                     error_msg += f"  - [ ] {task}\n"
                 error_msg += f"\nMark these complete first:\n"
                 for task in unchecked[:3]:  # Show first 3 examples
-                    task_clean = task.split()[0] if ' ' in task else task
+                    task_clean = task.split()[0] if " " in task else task
                     error_msg += f"  spec-kitty agent tasks mark-status {task_clean} --status done\n"
                 error_msg += f"\nOr use --force to override (not recommended)"
                 _output_error(json_output, error_msg)
@@ -633,7 +865,9 @@ def move_task(
         # Validate uncommitted changes when moving to for_review OR done
         # This catches the bug where agents edit artifacts but forget to commit
         if target_lane in ("for_review", "done"):
-            is_valid, guidance = _validate_ready_for_review(repo_root, feature_slug, task_id, force)
+            is_valid, guidance = _validate_ready_for_review(
+                repo_root, feature_slug, task_id, force
+            )
             if not is_valid:
                 error_msg = f"Cannot move {task_id} to {target_lane}\n\n"
                 error_msg += "\n".join(guidance)
@@ -659,42 +893,30 @@ def move_task(
 
         # Handle review feedback insertion if moving to planned with feedback
         updated_body = wp.body
-        if review_feedback_file and review_feedback_file.exists():
+        if resolved_review_feedback_file:
             # Read feedback content
-            feedback_content = review_feedback_file.read_text(encoding="utf-8").strip()
+            feedback_content = resolved_review_feedback_file.read_text(
+                encoding="utf-8"
+            ).strip()
 
             # Auto-detect reviewer if not provided
             if not reviewer:
-                try:
-                    import subprocess
-                    result = subprocess.run(
-                        ["git", "config", "user.name"],
-                        capture_output=True,
-                        text=True,
-                        encoding="utf-8",
-                        errors="replace",
-                        check=True
-                    )
-                    reviewer = result.stdout.strip() or "unknown"
-                except (subprocess.CalledProcessError, FileNotFoundError):
-                    reviewer = "unknown"
+                reviewer = _detect_reviewer_name()
 
-            # Insert feedback into "## Review Feedback" section
-            # Find the section and replace its content
-            review_section_start = updated_body.find("## Review Feedback")
-            if review_section_start != -1:
-                # Find the next section (starts with ##) or end of document
-                next_section_start = updated_body.find("\n##", review_section_start + 18)
+            if not feedback_content:
+                feedback_content = "_(No feedback provided in review file.)_"
 
-                if next_section_start == -1:
-                    # No next section, replace to end
-                    before = updated_body[:review_section_start]
-                    updated_body = before + f"## Review Feedback\n\n**Reviewed by**: {reviewer}\n**Status**: ❌ Changes Requested\n**Date**: {datetime.now(timezone.utc).strftime('%Y-%m-%d')}\n\n{feedback_content}\n\n"
-                else:
-                    # Replace content between this section and next
-                    before = updated_body[:review_section_start]
-                    after = updated_body[next_section_start:]
-                    updated_body = before + f"## Review Feedback\n\n**Reviewed by**: {reviewer}\n**Status**: ❌ Changes Requested\n**Date**: {datetime.now(timezone.utc).strftime('%Y-%m-%d')}\n\n{feedback_content}\n\n" + after
+            feedback_block = "\n".join(
+                [
+                    f"**Reviewed by**: {reviewer}",
+                    "**Status**: ❌ Changes Requested",
+                    f"**Date**: {datetime.now(timezone.utc).strftime('%Y-%m-%d')}",
+                    "",
+                    feedback_content,
+                ]
+            )
+
+            updated_body = _upsert_review_feedback_section(updated_body, feedback_block)
 
             # Update frontmatter for review status
             updated_front = set_scalar(updated_front, "review_status", "has_feedback")
@@ -704,25 +926,28 @@ def move_task(
         if target_lane == "done" and not extract_scalar(updated_front, "reviewed_by"):
             # Auto-detect reviewer if not provided
             if not reviewer:
-                try:
-                    import subprocess
-                    result = subprocess.run(
-                        ["git", "config", "user.name"],
-                        capture_output=True,
-                        text=True,
-                        encoding="utf-8",
-                        errors="replace",
-                        check=True
-                    )
-                    reviewer = result.stdout.strip() or "unknown"
-                except (subprocess.CalledProcessError, FileNotFoundError):
-                    reviewer = "unknown"
+                reviewer = _detect_reviewer_name()
 
             updated_front = set_scalar(updated_front, "reviewed_by", reviewer)
             updated_front = set_scalar(updated_front, "review_status", "approved")
 
-        # Build history entry
         timestamp = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+        # When re-submitting work after review feedback, preserve old feedback and
+        # mark unresolved checklist items as done with a comment.
+        if target_lane == "for_review" and current_review_status in {
+            "has_feedback",
+            "acknowledged",
+        }:
+            feedback_fixer = (
+                agent or extract_scalar(updated_front, "agent") or "unknown"
+            )
+            updated_body = _mark_review_feedback_done_comments(
+                updated_body, feedback_fixer, timestamp
+            )
+            updated_front = set_scalar(updated_front, "review_status", "acknowledged")
+
+        # Build history entry
         agent_name = agent or extract_scalar(updated_front, "agent") or "unknown"
         shell_pid_val = shell_pid or extract_scalar(updated_front, "shell_pid") or ""
         note_text = note or f"Moved to {target_lane}"
@@ -738,10 +963,10 @@ def move_task(
 
         file_written = False
         if auto_commit:
-            import subprocess
-
             # Extract spec number from feature_slug (e.g., "014" from "014-feature-name")
-            spec_number = feature_slug.split('-')[0] if '-' in feature_slug else feature_slug
+            spec_number = (
+                feature_slug.split("-")[0] if "-" in feature_slug else feature_slug
+            )
 
             # Commit to target branch (file is always in planning repo, worktrees excluded via sparse-checkout)
             commit_msg = f"chore: Move {task_id} to {target_lane} on spec {spec_number}"
@@ -757,21 +982,40 @@ def move_task(
                 wp.path.write_text(updated_doc, encoding="utf-8")
                 file_written = True
 
-                # Commit only the WP file (preserves staging area)
-                commit_success = safe_commit(
-                    repo_path=main_repo_root,
-                    files_to_commit=[actual_file_path],
-                    commit_message=commit_msg,
-                    allow_empty=True,  # OK if nothing changed
+                # Stage and commit the file
+                subprocess.run(
+                    ["git", "add", str(actual_file_path)],
+                    cwd=main_repo_root,
+                    capture_output=True,
+                    text=True,
+                    check=False,
                 )
 
-                if commit_success:
+                commit_result = subprocess.run(
+                    ["git", "commit", "-m", commit_msg],
+                    cwd=main_repo_root,
+                    capture_output=True,
+                    text=True,
+                    check=False,
+                )
+
+                if commit_result.returncode == 0:
                     if not json_output:
-                        console.print(f"[cyan]→ Committed status change to {target_branch} branch[/cyan]")
+                        console.print(
+                            f"[cyan]→ Committed status change to {target_branch} branch[/cyan]"
+                        )
+                elif (
+                    "nothing to commit" in commit_result.stdout
+                    or "nothing to commit" in commit_result.stderr
+                ):
+                    # File wasn't actually changed, that's OK
+                    pass
                 else:
-                    # Commit failed (safe_commit returned False)
+                    # Commit failed
                     if not json_output:
-                        console.print(f"[yellow]Warning:[/yellow] Failed to auto-commit status change")
+                        console.print(
+                            f"[yellow]Warning:[/yellow] Failed to auto-commit: {commit_result.stderr}"
+                        )
 
             except Exception as e:
                 # Unexpected error (e.g., not in a git repo) - ensure file gets written
@@ -789,17 +1033,19 @@ def move_task(
             "task_id": task_id,
             "old_lane": old_lane,
             "new_lane": target_lane,
-            "path": str(wp.path)
+            "path": str(wp.path),
         }
 
         _output_result(
             json_output,
             result,
-            f"[green]✓[/green] Moved {task_id} from {old_lane} to {target_lane}"
+            f"[green]✓[/green] Moved {task_id} from {old_lane} to {target_lane}",
         )
 
         # Check for dependent WP warnings when moving to for_review (T083)
-        _check_dependent_warnings(repo_root, feature_slug, task_id, target_lane, json_output)
+        _check_dependent_warnings(
+            repo_root, feature_slug, task_id, target_lane, json_output
+        )
 
     except Exception as e:
         _output_error(json_output, str(e))
@@ -808,11 +1054,25 @@ def move_task(
 
 @app.command(name="mark-status")
 def mark_status(
-    task_ids: Annotated[list[str], typer.Argument(help="Task ID(s) - space-separated (e.g., T001 T002 T003)")],
+    task_ids: Annotated[
+        list[str],
+        typer.Argument(help="Task ID(s) - space-separated (e.g., T001 T002 T003)"),
+    ],
     status: Annotated[str, typer.Option("--status", help="Status: done/pending")],
-    feature: Annotated[Optional[str], typer.Option("--feature", help="Feature slug (auto-detected if omitted)")] = None,
-    auto_commit: Annotated[bool, typer.Option("--auto-commit/--no-auto-commit", help="Automatically commit tasks.md changes to target branch")] = True,
-    json_output: Annotated[bool, typer.Option("--json", help="Output JSON format")] = False,
+    feature: Annotated[
+        Optional[str],
+        typer.Option("--feature", help="Feature slug (auto-detected if omitted)"),
+    ] = None,
+    auto_commit: Annotated[
+        bool,
+        typer.Option(
+            "--auto-commit/--no-auto-commit",
+            help="Automatically commit tasks.md changes to target branch",
+        ),
+    ] = True,
+    json_output: Annotated[
+        bool, typer.Option("--json", help="Output JSON format")
+    ] = False,
 ) -> None:
     """Update task checkbox status in tasks.md for one or more tasks.
 
@@ -835,7 +1095,9 @@ def mark_status(
     try:
         # Validate status
         if status not in ("done", "pending"):
-            _output_error(json_output, f"Invalid status '{status}'. Must be 'done' or 'pending'.")
+            _output_error(
+                json_output, f"Invalid status '{status}'. Must be 'done' or 'pending'."
+            )
             raise typer.Exit(1)
 
         # Validate we have at least one task
@@ -851,7 +1113,9 @@ def mark_status(
 
         feature_slug = _find_feature_slug(explicit_feature=feature)
         # Ensure we operate on the target branch for this feature
-        main_repo_root, target_branch = _ensure_target_branch_checked_out(repo_root, feature_slug, json_output)
+        main_repo_root, target_branch = _ensure_target_branch_checked_out(
+            repo_root, feature_slug, json_output
+        )
         feature_dir = main_repo_root / "kitty-specs" / feature_slug
         tasks_md = feature_dir / "tasks.md"
 
@@ -861,7 +1125,7 @@ def mark_status(
 
         # Read tasks.md content
         content = tasks_md.read_text(encoding="utf-8")
-        lines = content.split('\n')
+        lines = content.split("\n")
         new_checkbox = "[x]" if status == "done" else "[ ]"
 
         # Track which tasks were updated and which weren't found
@@ -873,9 +1137,9 @@ def mark_status(
             task_found = False
             for i, line in enumerate(lines):
                 # Match checkbox lines with this task ID
-                if re.search(rf'-\s*\[[ x]\]\s*{re.escape(task_id)}\b', line):
+                if re.search(rf"-\s*\[[ x]\]\s*{re.escape(task_id)}\b", line):
                     # Replace the checkbox
-                    lines[i] = re.sub(r'-\s*\[[ x]\]', f'- {new_checkbox}', line)
+                    lines[i] = re.sub(r"-\s*\[[ x]\]", f"- {new_checkbox}", line)
                     updated_tasks.append(task_id)
                     task_found = True
                     break
@@ -885,11 +1149,14 @@ def mark_status(
 
         # Fail if no tasks were updated
         if not updated_tasks:
-            _output_error(json_output, f"No task IDs found in tasks.md: {', '.join(not_found_tasks)}")
+            _output_error(
+                json_output,
+                f"No task IDs found in tasks.md: {', '.join(not_found_tasks)}",
+            )
             raise typer.Exit(1)
 
         # Write updated content (single write for all changes)
-        updated_content = '\n'.join(lines)
+        updated_content = "\n".join(lines)
         tasks_md.write_text(updated_content, encoding="utf-8")
 
         # Auto-commit to TARGET branch (detects from feature meta.json)
@@ -897,35 +1164,65 @@ def mark_status(
             import subprocess
 
             # Extract spec number from feature_slug (e.g., "014" from "014-feature-name")
-            spec_number = feature_slug.split('-')[0] if '-' in feature_slug else feature_slug
+            spec_number = (
+                feature_slug.split("-")[0] if "-" in feature_slug else feature_slug
+            )
 
             # Build commit message
             if len(updated_tasks) == 1:
-                commit_msg = f"chore: Mark {updated_tasks[0]} as {status} on spec {spec_number}"
+                commit_msg = (
+                    f"chore: Mark {updated_tasks[0]} as {status} on spec {spec_number}"
+                )
             else:
                 commit_msg = f"chore: Mark {len(updated_tasks)} subtasks as {status} on spec {spec_number}"
 
             try:
                 actual_tasks_path = tasks_md.resolve()
 
-                # Commit only the tasks.md file (preserves staging area)
-                commit_success = safe_commit(
-                    repo_path=main_repo_root,
-                    files_to_commit=[actual_tasks_path],
-                    commit_message=commit_msg,
-                    allow_empty=True,  # OK if nothing changed
+                # Stage the file first, then commit
+                # Use -u to only update tracked files (bypasses .gitignore check)
+                add_result = subprocess.run(
+                    ["git", "add", "-u", str(actual_tasks_path)],
+                    cwd=main_repo_root,
+                    capture_output=True,
+                    text=True,
+                    check=False,
                 )
 
-                if commit_success:
+                if add_result.returncode != 0:
                     if not json_output:
-                        console.print(f"[cyan]→ Committed subtask changes to {target_branch} branch[/cyan]")
+                        console.print(
+                            f"[yellow]Warning:[/yellow] Failed to stage file: {add_result.stderr}"
+                        )
                 else:
-                    if not json_output:
-                        console.print(f"[yellow]Warning:[/yellow] Failed to auto-commit subtask changes")
+                    # Commit the staged file
+                    commit_result = subprocess.run(
+                        ["git", "commit", "-m", commit_msg],
+                        cwd=main_repo_root,
+                        capture_output=True,
+                        text=True,
+                        check=False,
+                    )
+
+                    if commit_result.returncode == 0:
+                        if not json_output:
+                            console.print(
+                                f"[cyan]→ Committed subtask changes to {target_branch} branch[/cyan]"
+                            )
+                    elif (
+                        "nothing to commit" not in commit_result.stdout
+                        and "nothing to commit" not in commit_result.stderr
+                    ):
+                        if not json_output:
+                            console.print(
+                                f"[yellow]Warning:[/yellow] Failed to auto-commit: {commit_result.stderr}"
+                            )
 
             except Exception as e:
                 if not json_output:
-                    console.print(f"[yellow]Warning:[/yellow] Auto-commit exception: {e}")
+                    console.print(
+                        f"[yellow]Warning:[/yellow] Auto-commit exception: {e}"
+                    )
 
         # Build result
         result = {
@@ -933,12 +1230,14 @@ def mark_status(
             "updated": updated_tasks,
             "not_found": not_found_tasks,
             "status": status,
-            "count": len(updated_tasks)
+            "count": len(updated_tasks),
         }
 
         # Output result
         if not_found_tasks and not json_output:
-            console.print(f"[yellow]Warning:[/yellow] Not found: {', '.join(not_found_tasks)}")
+            console.print(
+                f"[yellow]Warning:[/yellow] Not found: {', '.join(not_found_tasks)}"
+            )
 
         if len(updated_tasks) == 1:
             success_msg = f"[green]✓[/green] Marked {updated_tasks[0]} as {status}"
@@ -954,9 +1253,16 @@ def mark_status(
 
 @app.command(name="list-tasks")
 def list_tasks(
-    lane: Annotated[Optional[str], typer.Option("--lane", help="Filter by lane")] = None,
-    feature: Annotated[Optional[str], typer.Option("--feature", help="Feature slug (auto-detected if omitted)")] = None,
-    json_output: Annotated[bool, typer.Option("--json", help="Output JSON format")] = False,
+    lane: Annotated[
+        Optional[str], typer.Option("--lane", help="Filter by lane")
+    ] = None,
+    feature: Annotated[
+        Optional[str],
+        typer.Option("--feature", help="Feature slug (auto-detected if omitted)"),
+    ] = None,
+    json_output: Annotated[
+        bool, typer.Option("--json", help="Output JSON format")
+    ] = False,
 ) -> None:
     """List tasks with optional lane filtering.
 
@@ -974,7 +1280,9 @@ def list_tasks(
         feature_slug = _find_feature_slug(explicit_feature=feature)
 
         # Ensure we operate on the target branch for this feature
-        main_repo_root, _ = _ensure_target_branch_checked_out(repo_root, feature_slug, json_output)
+        main_repo_root, _ = _ensure_target_branch_checked_out(
+            repo_root, feature_slug, json_output
+        )
 
         # Find all task files
         tasks_dir = main_repo_root / "kitty-specs" / feature_slug / "tasks"
@@ -991,19 +1299,23 @@ def list_tasks(
             frontmatter, _, _ = split_frontmatter(content)
 
             task_lane = extract_scalar(frontmatter, "lane") or "planned"
-            task_wp_id = extract_scalar(frontmatter, "work_package_id") or task_file.stem
+            task_wp_id = (
+                extract_scalar(frontmatter, "work_package_id") or task_file.stem
+            )
             task_title = extract_scalar(frontmatter, "title") or ""
 
             # Filter by lane if specified
             if lane and task_lane != lane:
                 continue
 
-            tasks.append({
-                "work_package_id": task_wp_id,
-                "title": task_title,
-                "lane": task_lane,
-                "path": str(task_file)
-            })
+            tasks.append(
+                {
+                    "work_package_id": task_wp_id,
+                    "title": task_title,
+                    "lane": task_lane,
+                    "path": str(task_file),
+                }
+            )
 
         # Sort by work package ID
         tasks.sort(key=lambda t: t["work_package_id"])
@@ -1012,11 +1324,17 @@ def list_tasks(
             print(json.dumps({"tasks": tasks, "count": len(tasks)}))
         else:
             if not tasks:
-                console.print(f"[yellow]No tasks found{' in lane ' + lane if lane else ''}[/yellow]")
+                console.print(
+                    f"[yellow]No tasks found{' in lane ' + lane if lane else ''}[/yellow]"
+                )
             else:
-                console.print(f"[bold]Tasks{' in lane ' + lane if lane else ''}:[/bold]\n")
+                console.print(
+                    f"[bold]Tasks{' in lane ' + lane if lane else ''}:[/bold]\n"
+                )
                 for task in tasks:
-                    console.print(f"  {task['work_package_id']}: {task['title']} [{task['lane']}]")
+                    console.print(
+                        f"  {task['work_package_id']}: {task['title']} [{task['lane']}]"
+                    )
 
     except Exception as e:
         _output_error(json_output, str(e))
@@ -1027,10 +1345,17 @@ def list_tasks(
 def add_history(
     task_id: Annotated[str, typer.Argument(help="Task ID (e.g., WP01)")],
     note: Annotated[str, typer.Option("--note", help="History note")],
-    feature: Annotated[Optional[str], typer.Option("--feature", help="Feature slug (auto-detected if omitted)")] = None,
+    feature: Annotated[
+        Optional[str],
+        typer.Option("--feature", help="Feature slug (auto-detected if omitted)"),
+    ] = None,
     agent: Annotated[Optional[str], typer.Option("--agent", help="Agent name")] = None,
-    shell_pid: Annotated[Optional[str], typer.Option("--shell-pid", help="Shell PID")] = None,
-    json_output: Annotated[bool, typer.Option("--json", help="Output JSON format")] = False,
+    shell_pid: Annotated[
+        Optional[str], typer.Option("--shell-pid", help="Shell PID")
+    ] = None,
+    json_output: Annotated[
+        bool, typer.Option("--json", help="Output JSON format")
+    ] = False,
 ) -> None:
     """Append history entry to task activity log.
 
@@ -1061,7 +1386,9 @@ def add_history(
         shell_pid_val = shell_pid or extract_scalar(wp.frontmatter, "shell_pid") or ""
 
         shell_part = f"shell_pid={shell_pid_val} – " if shell_pid_val else ""
-        history_entry = f"- {timestamp} – {agent_name} – {shell_part}lane={current_lane} – {note}"
+        history_entry = (
+            f"- {timestamp} – {agent_name} – {shell_part}lane={current_lane} – {note}"
+        )
 
         # Add history entry to body
         updated_body = append_activity_log(wp.body, history_entry)
@@ -1070,16 +1397,10 @@ def add_history(
         updated_doc = build_document(wp.frontmatter, updated_body, wp.padding)
         wp.path.write_text(updated_doc, encoding="utf-8")
 
-        result = {
-            "result": "success",
-            "task_id": task_id,
-            "note": note
-        }
+        result = {"result": "success", "task_id": task_id, "note": note}
 
         _output_result(
-            json_output,
-            result,
-            f"[green]✓[/green] Added history entry to {task_id}"
+            json_output, result, f"[green]✓[/green] Added history entry to {task_id}"
         )
 
     except Exception as e:
@@ -1089,8 +1410,13 @@ def add_history(
 
 @app.command(name="finalize-tasks")
 def finalize_tasks(
-    feature: Annotated[Optional[str], typer.Option("--feature", help="Feature slug (auto-detected if omitted)")] = None,
-    json_output: Annotated[bool, typer.Option("--json", help="Output JSON format")] = False,
+    feature: Annotated[
+        Optional[str],
+        typer.Option("--feature", help="Feature slug (auto-detected if omitted)"),
+    ] = None,
+    json_output: Annotated[
+        bool, typer.Option("--json", help="Output JSON format")
+    ] = False,
 ) -> None:
     """Parse tasks.md and inject dependencies into WP frontmatter.
 
@@ -1111,7 +1437,9 @@ def finalize_tasks(
 
         feature_slug = _find_feature_slug(explicit_feature=feature)
         # Ensure we operate on the target branch for this feature
-        main_repo_root, _ = _ensure_target_branch_checked_out(repo_root, feature_slug, json_output)
+        main_repo_root, _ = _ensure_target_branch_checked_out(
+            repo_root, feature_slug, json_output
+        )
         feature_dir = main_repo_root / "kitty-specs" / feature_slug
         tasks_md = feature_dir / "tasks.md"
         tasks_dir = feature_dir / "tasks"
@@ -1132,14 +1460,17 @@ def finalize_tasks(
         # Strategy 2: Look for phase groupings where later phases depend on earlier ones
         # For now, implement simple pattern matching
 
-        wp_pattern = re.compile(r'WP(\d{2})')
-        depends_pattern = re.compile(r'(?:depends on|dependency:|requires):\s*(WP\d{2}(?:,\s*WP\d{2})*)', re.IGNORECASE)
+        wp_pattern = re.compile(r"WP(\d{2})")
+        depends_pattern = re.compile(
+            r"(?:depends on|dependency:|requires):\s*(WP\d{2}(?:,\s*WP\d{2})*)",
+            re.IGNORECASE,
+        )
 
         current_wp = None
-        for line in content.split('\n'):
+        for line in content.split("\n"):
             # Find WP headers
             wp_match = wp_pattern.search(line)
-            if wp_match and ('##' in line or 'Work Package' in line):
+            if wp_match and ("##" in line or "Work Package" in line):
                 current_wp = f"WP{wp_match.group(1)}"
                 if current_wp not in dependencies_map:
                     dependencies_map[current_wp] = []
@@ -1149,14 +1480,16 @@ def finalize_tasks(
                 dep_match = depends_pattern.search(line)
                 if dep_match:
                     # Extract all WP IDs mentioned
-                    dep_wps = re.findall(r'WP\d{2}', dep_match.group(1))
+                    dep_wps = re.findall(r"WP\d{2}", dep_match.group(1))
                     dependencies_map[current_wp].extend(dep_wps)
                     # Remove duplicates
-                    dependencies_map[current_wp] = list(dict.fromkeys(dependencies_map[current_wp]))
+                    dependencies_map[current_wp] = list(
+                        dict.fromkeys(dependencies_map[current_wp])
+                    )
 
         # Ensure all WP files in tasks/ dir are in the map (with empty deps if not mentioned)
         for wp_file in tasks_dir.glob("WP*.md"):
-            wp_id = wp_file.stem.split('-')[0]  # Extract WP## from WP##-title.md
+            wp_id = wp_file.stem.split("-")[0]  # Extract WP## from WP##-title.md
             if wp_id not in dependencies_map:
                 dependencies_map[wp_id] = []
 
@@ -1164,7 +1497,9 @@ def finalize_tasks(
         updated_count = 0
         for wp_id, deps in sorted(dependencies_map.items()):
             # Find WP file
-            wp_files = list(tasks_dir.glob(f"{wp_id}-*.md")) + list(tasks_dir.glob(f"{wp_id}.md"))
+            wp_files = list(tasks_dir.glob(f"{wp_id}-*.md")) + list(
+                tasks_dir.glob(f"{wp_id}.md")
+            )
             if not wp_files:
                 console.print(f"[yellow]Warning:[/yellow] No file found for {wp_id}")
                 continue
@@ -1176,7 +1511,7 @@ def finalize_tasks(
             frontmatter, body, padding = split_frontmatter(content)
 
             # Update dependencies field
-            updated_front = set_scalar(frontmatter, "dependencies", deps)
+            updated_front = set_scalar(frontmatter, "dependencies", str(deps))
 
             # Rebuild and write
             updated_doc = build_document(updated_front, body, padding)
@@ -1185,6 +1520,7 @@ def finalize_tasks(
 
         # Validate dependency graph for cycles
         from specify_cli.core.dependency_graph import detect_cycles
+
         cycles = detect_cycles(dependencies_map)
         if cycles:
             _output_error(json_output, f"Circular dependencies detected: {cycles}")
@@ -1194,13 +1530,13 @@ def finalize_tasks(
             "result": "success",
             "updated": updated_count,
             "dependencies": dependencies_map,
-            "feature": feature_slug
+            "feature": feature_slug,
         }
 
         _output_result(
             json_output,
             result,
-            f"[green]✓[/green] Updated {updated_count} WP files with dependencies"
+            f"[green]✓[/green] Updated {updated_count} WP files with dependencies",
         )
 
     except Exception as e:
@@ -1211,8 +1547,13 @@ def finalize_tasks(
 @app.command(name="validate-workflow")
 def validate_workflow(
     task_id: Annotated[str, typer.Argument(help="Task ID (e.g., WP01)")],
-    feature: Annotated[Optional[str], typer.Option("--feature", help="Feature slug (auto-detected if omitted)")] = None,
-    json_output: Annotated[bool, typer.Option("--json", help="Output JSON format")] = False,
+    feature: Annotated[
+        Optional[str],
+        typer.Option("--feature", help="Feature slug (auto-detected if omitted)"),
+    ] = None,
+    json_output: Annotated[
+        bool, typer.Option("--json", help="Output JSON format")
+    ] = False,
 ) -> None:
     """Validate task metadata structure and workflow consistency.
 
@@ -1247,12 +1588,16 @@ def validate_workflow(
         # Check lane is valid
         lane_value = extract_scalar(wp.frontmatter, "lane")
         if lane_value and lane_value not in LANES:
-            errors.append(f"Invalid lane '{lane_value}'. Must be one of: {', '.join(LANES)}")
+            errors.append(
+                f"Invalid lane '{lane_value}'. Must be one of: {', '.join(LANES)}"
+            )
 
         # Check work_package_id matches filename
         wp_id = extract_scalar(wp.frontmatter, "work_package_id")
         if wp_id and not wp.path.name.startswith(wp_id):
-            warnings.append(f"Work package ID '{wp_id}' doesn't match filename '{wp.path.name}'")
+            warnings.append(
+                f"Work package ID '{wp_id}' doesn't match filename '{wp.path.name}'"
+            )
 
         # Check for activity log
         if "## Activity Log" not in wp.body:
@@ -1266,7 +1611,7 @@ def validate_workflow(
             "errors": errors,
             "warnings": warnings,
             "task_id": task_id,
-            "lane": lane_value or "unknown"
+            "lane": lane_value or "unknown",
         }
 
         if json_output:
@@ -1293,15 +1638,19 @@ def validate_workflow(
 def status(
     feature: Annotated[
         Optional[str],
-        typer.Option("--feature", "-f", help="Feature slug (e.g., 012-documentation-mission). Auto-detected if not provided.")
+        typer.Option(
+            "--feature",
+            "-f",
+            help="Feature slug (e.g., 012-documentation-mission). Auto-detected if not provided.",
+        ),
     ] = None,
-    json_output: Annotated[
-        bool,
-        typer.Option("--json", help="Output as JSON")
-    ] = False,
+    json_output: Annotated[bool, typer.Option("--json", help="Output as JSON")] = False,
     stale_threshold: Annotated[
         int,
-        typer.Option("--stale-threshold", help="Minutes of inactivity before a WP is considered stale")
+        typer.Option(
+            "--stale-threshold",
+            help="Minutes of inactivity before a WP is considered stale",
+        ),
     ] = 10,
 ):
     """Display kanban status board for all work packages in a feature.
@@ -1318,10 +1667,11 @@ def status(
         spec-kitty agent tasks status --json
         spec-kitty agent tasks status --stale-threshold 15
     """
-    from rich.table import Table
-    from rich.panel import Panel
-    from rich.text import Text
     from collections import Counter
+
+    from rich.panel import Panel
+    from rich.table import Table
+    from rich.text import Text
 
     try:
         cwd = Path.cwd().resolve()
@@ -1334,13 +1684,17 @@ def status(
         feature_slug = _find_feature_slug(explicit_feature=feature)
 
         # Ensure we operate on the target branch for this feature
-        main_repo_root, _ = _ensure_target_branch_checked_out(repo_root, feature_slug, json_output)
+        main_repo_root, _ = _ensure_target_branch_checked_out(
+            repo_root, feature_slug, json_output
+        )
 
         # Locate feature directory
         feature_dir = main_repo_root / "kitty-specs" / feature_slug
 
         if not feature_dir.exists():
-            console.print(f"[red]Error:[/red] Feature directory not found: {feature_dir}")
+            console.print(
+                f"[red]Error:[/red] Feature directory not found: {feature_dir}"
+            )
             raise typer.Exit(1)
 
         tasks_dir = feature_dir / "tasks"
@@ -1352,7 +1706,9 @@ def status(
         # Collect all work packages
         work_packages = []
         for wp_file in sorted(tasks_dir.glob("WP*.md")):
-            front, body, padding = split_frontmatter(wp_file.read_text(encoding="utf-8"))
+            front, body, padding = split_frontmatter(
+                wp_file.read_text(encoding="utf-8")
+            )
 
             wp_id = extract_scalar(front, "work_package_id")
             title = extract_scalar(front, "title")
@@ -1361,15 +1717,17 @@ def status(
             agent = extract_scalar(front, "agent") or ""
             shell_pid = extract_scalar(front, "shell_pid") or ""
 
-            work_packages.append({
-                "id": wp_id,
-                "title": title,
-                "lane": lane,
-                "phase": phase,
-                "file": wp_file.name,
-                "agent": agent,
-                "shell_pid": shell_pid,
-            })
+            work_packages.append(
+                {
+                    "id": wp_id,
+                    "title": title,
+                    "lane": lane,
+                    "phase": phase,
+                    "file": wp_file.name,
+                    "agent": agent,
+                    "shell_pid": shell_pid,
+                }
+            )
 
         if not work_packages:
             console.print(f"[yellow]No work packages found in {tasks_dir}[/yellow]")
@@ -1403,7 +1761,9 @@ def status(
                 "total_wps": len(work_packages),
                 "by_lane": dict(lane_counts),
                 "work_packages": work_packages,
-                "progress_percentage": round(lane_counts.get("done", 0) / len(work_packages) * 100, 1),
+                "progress_percentage": round(
+                    lane_counts.get("done", 0) / len(work_packages) * 100, 1
+                ),
                 "stale_wps": stale_count,
             }
             print(json.dumps(result, indent=2))
@@ -1471,15 +1831,24 @@ def status(
         console.print()
 
         # Kanban board table
-        table = Table(title="Kanban Board", show_header=True, header_style="bold magenta", border_style="dim")
+        table = Table(
+            title="Kanban Board",
+            show_header=True,
+            header_style="bold magenta",
+            border_style="dim",
+        )
         table.add_column("📋 Planned", style="yellow", no_wrap=False, width=25)
         table.add_column("🔄 Doing", style="blue", no_wrap=False, width=25)
         table.add_column("👀 For Review", style="cyan", no_wrap=False, width=25)
         table.add_column("✅ Done", style="green", no_wrap=False, width=25)
 
         # Find max length for rows
-        max_rows = max(len(by_lane["planned"]), len(by_lane["doing"]),
-                       len(by_lane["for_review"]), len(by_lane["done"]))
+        max_rows = max(
+            len(by_lane["planned"]),
+            len(by_lane["doing"]),
+            len(by_lane["for_review"]),
+            len(by_lane["done"]),
+        )
 
         # Add rows
         for i in range(max_rows):
@@ -1487,7 +1856,11 @@ def status(
             for lane in ["planned", "doing", "for_review", "done"]:
                 if i < len(by_lane[lane]):
                     wp = by_lane[lane][i]
-                    title_truncated = wp['title'][:22] + "..." if len(wp['title']) > 22 else wp['title']
+                    title_truncated = (
+                        wp["title"][:22] + "..."
+                        if len(wp["title"]) > 22
+                        else wp["title"]
+                    )
 
                     # Add stale indicator for doing WPs
                     if lane == "doing" and wp.get("is_stale"):
@@ -1505,7 +1878,7 @@ def status(
             f"[bold]{len(by_lane['doing'])} WPs[/bold]",
             f"[bold]{len(by_lane['for_review'])} WPs[/bold]",
             f"[bold]{len(by_lane['done'])} WPs[/bold]",
-            style="dim"
+            style="dim",
         )
 
         console.print(table)
@@ -1525,7 +1898,9 @@ def status(
                 if wp.get("is_stale"):
                     mins = wp.get("minutes_since_commit", "?")
                     agent = wp.get("agent", "unknown")
-                    console.print(f"  • [red]⚠️ {wp['id']}[/red] - {wp['title']} [dim](stale: {mins}m, agent: {agent})[/dim]")
+                    console.print(
+                        f"  • [red]⚠️ {wp['id']}[/red] - {wp['title']} [dim](stale: {mins}m, agent: {agent})[/dim]"
+                    )
                     stale_wps.append(wp)
                 else:
                     console.print(f"  • {wp['id']} - {wp['title']}")
@@ -1533,8 +1908,12 @@ def status(
 
             # Show stale warning if any
             if stale_wps:
-                console.print(f"[yellow]⚠️  {len(stale_wps)} stale WP(s) detected - agents may have stopped without transitioning[/yellow]")
-                console.print("[dim]   Run: spec-kitty agent tasks move-task <WP_ID> --to for_review[/dim]")
+                console.print(
+                    f"[yellow]⚠️  {len(stale_wps)} stale WP(s) detected - agents may have stopped without transitioning[/yellow]"
+                )
+                console.print(
+                    "[dim]   Run: spec-kitty agent tasks move-task <WP_ID> --to for_review[/dim]"
+                )
                 console.print()
 
         if by_lane["planned"]:
@@ -1543,7 +1922,9 @@ def status(
             for wp in by_lane["planned"][:3]:
                 console.print(f"  • {wp['id']} - {wp['title']}")
             if len(by_lane["planned"]) > 3:
-                console.print(f"  [dim]... and {len(by_lane['planned']) - 3} more[/dim]")
+                console.print(
+                    f"  [dim]... and {len(by_lane['planned']) - 3} more[/dim]"
+                )
             console.print()
 
         # Summary metrics
@@ -1566,8 +1947,13 @@ def status(
 @app.command(name="list-dependents")
 def list_dependents(
     wp_id: Annotated[str, typer.Argument(help="Work package ID (e.g., WP01)")],
-    feature: Annotated[Optional[str], typer.Option("--feature", help="Feature slug (auto-detected if omitted)")] = None,
-    json_output: Annotated[bool, typer.Option("--json", help="Output JSON format")] = False,
+    feature: Annotated[
+        Optional[str],
+        typer.Option("--feature", help="Feature slug (auto-detected if omitted)"),
+    ] = None,
+    json_output: Annotated[
+        bool, typer.Option("--json", help="Output JSON format")
+    ] = False,
 ) -> None:
     """Find all WPs that depend on a given WP (downstream dependents).
 
@@ -1587,7 +1973,9 @@ def list_dependents(
             raise typer.Exit(1)
 
         feature_slug = _find_feature_slug(explicit_feature=feature)
-        main_repo_root, _ = _ensure_target_branch_checked_out(repo_root, feature_slug, json_output)
+        main_repo_root, _ = _ensure_target_branch_checked_out(
+            repo_root, feature_slug, json_output
+        )
         feature_dir = main_repo_root / "kitty-specs" / feature_slug
 
         if not feature_dir.exists():
@@ -1613,18 +2001,24 @@ def list_dependents(
             own_deps = []
 
         if json_output:
-            print(json.dumps({
-                "wp_id": wp_id,
-                "depends_on": own_deps,
-                "dependents": dependents
-            }))
+            print(
+                json.dumps(
+                    {"wp_id": wp_id, "depends_on": own_deps, "dependents": dependents}
+                )
+            )
         else:
             console.print(f"\n[bold]{wp_id} Dependency Info:[/bold]")
-            console.print(f"  Depends on: {', '.join(own_deps) if own_deps else '[dim](none)[/dim]'}")
-            console.print(f"  Depended on by: {', '.join(dependents) if dependents else '[dim](none)[/dim]'}")
+            console.print(
+                f"  Depends on: {', '.join(own_deps) if own_deps else '[dim](none)[/dim]'}"
+            )
+            console.print(
+                f"  Depended on by: {', '.join(dependents) if dependents else '[dim](none)[/dim]'}"
+            )
 
             if dependents:
-                console.print(f"\n[yellow]⚠️  Changes to {wp_id} may impact: {', '.join(dependents)}[/yellow]")
+                console.print(
+                    f"\n[yellow]⚠️  Changes to {wp_id} may impact: {', '.join(dependents)}[/yellow]"
+                )
             console.print()
 
     except Exception as e:

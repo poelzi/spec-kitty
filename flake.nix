@@ -93,6 +93,7 @@
           nativeCheckInputs = with python3Packages; [
             pytest
             pytest-asyncio
+            respx
             build
             pkgs.git
             pkgs.coreutils

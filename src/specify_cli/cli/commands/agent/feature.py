@@ -22,24 +22,18 @@ from specify_cli.core.dependency_graph import (
     detect_cycles,
     validate_dependencies,
 )
-from specify_cli.core.git_ops import (
-    get_current_branch,
-    is_git_repo,
-    run_command,
-    resolve_target_branch,
-)
+from specify_cli.core.git_ops import get_current_branch, is_git_repo, run_command
 from specify_cli.core.paths import is_worktree_context, locate_project_root
 from specify_cli.core.feature_detection import (
     detect_feature_directory,
     FeatureDetectionError,
 )
-from specify_cli.git import safe_commit
 from specify_cli.core.worktree import (
     get_next_feature_number,
     validate_feature_structure,
 )
 from specify_cli.frontmatter import read_frontmatter, write_frontmatter
-from specify_cli.mission_system import get_feature_mission_key
+from specify_cli.mission import get_feature_mission_key
 
 app = typer.Typer(
     name="feature",
@@ -51,35 +45,43 @@ console = Console()
 
 
 def _resolve_primary_branch(repo_root: Path) -> str:
-    """Resolve the primary branch name (main, master, etc.).
-
-    Delegates to the centralized implementation in core.git_ops.
-    """
-    from specify_cli.core.git_ops import resolve_primary_branch
-    return resolve_primary_branch(repo_root)
+    """Resolve the primary branch name (main or master)."""
+    for candidate in ("main", "master"):
+        result = subprocess.run(
+            ["git", "rev-parse", "--verify", candidate],
+            cwd=repo_root,
+            capture_output=True,
+            check=False,
+        )
+        if result.returncode == 0:
+            return candidate
+    raise RuntimeError("Could not find main or master branch")
 
 
 def _resolve_planning_branch(repo_root: Path, feature_dir: Path | None = None) -> str:
-    """Resolve the planning branch for a feature using unified branch resolution.
+    """Resolve the planning branch for a feature.
 
-    This function wraps resolve_target_branch() to maintain backward compatibility
-    while using the unified Bug #124 fix for branch routing.
+    Planning artifacts (kitty-specs/) are committed to the upstream branch
+    (e.g., "main"), NOT the landing branch. For v0.15.0+ features,
+    upstream_branch is read from meta.json. For legacy features, falls back
+    to target_branch, then the current branch.
     """
-    current_branch = get_current_branch(repo_root) or _resolve_primary_branch(repo_root)
+    current_branch = get_current_branch(repo_root) or "main"
     if feature_dir is None:
         return current_branch
 
-    # Use unified resolve_target_branch() from Bug #124 fix
-    feature_slug = feature_dir.name
-    resolution = resolve_target_branch(
-        feature_slug=feature_slug,
-        repo_path=repo_root,
-        current_branch=current_branch,
-        respect_current=True,
-    )
+    meta_file = feature_dir / "meta.json"
+    if not meta_file.exists():
+        return current_branch
 
-    # Return target branch (the branch feature should target)
-    return resolution.target
+    try:
+        meta = json.loads(meta_file.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError):
+        return current_branch
+
+    # Use upstream_branch for planning (v0.15.0+), fall back to target_branch for legacy
+    planning_branch = meta.get("upstream_branch") or meta.get("target_branch")
+    return planning_branch or current_branch
 
 
 def _ensure_branch_checked_out(
@@ -87,25 +89,52 @@ def _ensure_branch_checked_out(
     target_branch: str,
     json_output: bool = False,
 ) -> None:
-    """Check branch context without auto-checkout (respects user's current branch).
-
-    Shows notification if current branch differs from target branch.
-    Does NOT perform git checkout.
-    """
+    """Ensure the planning repo is checked out to the target branch."""
     current_branch = get_current_branch(repo_root)
     if current_branch is None:
-        if is_git_repo(repo_root):
-            raise RuntimeError("Planning repo is in detached HEAD state; checkout a branch before continuing")
         raise RuntimeError("Not in a git repository")
+    if current_branch == "HEAD":
+        raise RuntimeError("Planning repo is in detached HEAD state; checkout a branch before continuing")
 
-    # If branches differ, show notification (no auto-checkout)
-    if current_branch != target_branch:
-        if not json_output:
-            console.print(
-                f"[yellow]Note:[/yellow] You are on '{current_branch}', "
-                f"feature targets '{target_branch}'. "
-                f"Operations will use '{current_branch}'."
+    if current_branch == target_branch:
+        return
+
+    if target_branch not in ["main", "master"]:
+        branch_exists_result = subprocess.run(
+            ["git", "rev-parse", "--verify", target_branch],
+            cwd=repo_root,
+            capture_output=True,
+            check=False,
+        )
+        if branch_exists_result.returncode != 0:
+            primary_branch = _resolve_primary_branch(repo_root)
+            create_result = subprocess.run(
+                ["git", "branch", target_branch, primary_branch],
+                cwd=repo_root,
+                capture_output=True,
+                text=True,
+                check=False,
             )
+            if create_result.returncode != 0:
+                raise RuntimeError(
+                    f"Could not create target branch '{target_branch}': {create_result.stderr or create_result.stdout}"
+                )
+            if not json_output:
+                console.print(f"[green]✓[/green] Created target branch: {target_branch} from {primary_branch}")
+
+    checkout_result = subprocess.run(
+        ["git", "checkout", target_branch],
+        cwd=repo_root,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if checkout_result.returncode != 0:
+        raise RuntimeError(
+            f"Could not checkout target branch '{target_branch}': {checkout_result.stderr or checkout_result.stdout}"
+        )
+    if not json_output:
+        console.print(f"[cyan]→ Using {target_branch} as planning branch[/cyan]")
 
 
 def _commit_to_branch(
@@ -116,40 +145,43 @@ def _commit_to_branch(
     target_branch: str,
     json_output: bool = False,
 ) -> None:
-    """Commit planning artifact to current branch (respects user context).
+    """Commit planning artifact to target branch.
 
     Args:
         file_path: Path to file being committed
         feature_slug: Feature slug (e.g., "001-my-feature")
         artifact_type: Type of artifact ("spec", "plan", "tasks")
         repo_root: Repository root path (ensures commits go to planning repo, not worktree)
-        target_branch: Branch feature targets (for informational messages only)
+        target_branch: Branch to commit planning artifacts to
         json_output: If True, suppress Rich console output
 
     Raises:
         subprocess.CalledProcessError: If commit fails unexpectedly
+        typer.Exit: If not on target branch
     """
     try:
         current_branch = get_current_branch(repo_root)
-        if current_branch is None:
-            raise RuntimeError("Not in a git repository")
-
-        # Commit only this file (preserves staging area)
-        commit_msg = f"Add {artifact_type} for feature {feature_slug}"
-        success = safe_commit(
-            repo_path=repo_root,
-            files_to_commit=[file_path],
-            commit_message=commit_msg,
-            allow_empty=False,
-        )
-        if not success:
-            error_msg = f"Failed to commit {artifact_type}"
+        if current_branch != target_branch:
+            error_msg = f"Planning artifacts must be committed to {target_branch} (currently on: {current_branch})"
             if not json_output:
                 console.print(f"[red]Error:[/red] {error_msg}")
+                console.print(f"[yellow]Switch to target branch:[/yellow] cd {repo_root} && git checkout {target_branch}")
             raise RuntimeError(error_msg)
 
+        # Add file to staging (run from repo root to ensure planning repo, not worktree)
+        run_command(["git", "add", str(file_path)], check_return=True, capture=True, cwd=repo_root)
+
+        # Commit with descriptive message
+        commit_msg = f"Add {artifact_type} for feature {feature_slug}"
+        run_command(
+            ["git", "commit", "-m", commit_msg],
+            check_return=True,
+            capture=True,
+            cwd=repo_root,
+        )
+
         if not json_output:
-            console.print(f"[green]✓[/green] {artifact_type.capitalize()} committed to {current_branch}")
+            console.print(f"[green]✓[/green] {artifact_type.capitalize()} committed to {target_branch}")
 
     except subprocess.CalledProcessError as e:
         # Check if it's just "nothing to commit" (benign)
@@ -210,27 +242,6 @@ def create_feature(
     Examples:
         spec-kitty agent create-feature "new-dashboard" --json
     """
-    # Validate kebab-case format early (before any operations)
-    KEBAB_CASE_PATTERN = r'^[a-z][a-z0-9]*(-[a-z0-9]+)*$'
-    if not re.match(KEBAB_CASE_PATTERN, feature_slug):
-        error_msg = (
-            f"Invalid feature slug '{feature_slug}'. "
-            "Must be kebab-case (lowercase letters, numbers, hyphens only)."
-            "\n\nValid examples:"
-            "\n  - user-auth"
-            "\n  - fix-bug-123"
-            "\n  - new-dashboard"
-            "\n\nInvalid examples:"
-            "\n  - User-Auth (uppercase)"
-            "\n  - user_auth (underscores)"
-            "\n  - 123-fix (starts with number)"
-        )
-        if json_output:
-            console.print(json.dumps({"error": error_msg}))
-        else:
-            console.print(f"[red]Error:[/red] {error_msg}")
-        raise typer.Exit(1)
-
     try:
         # GUARD: Refuse to run from inside a worktree (must be in planning repo)
         cwd = Path.cwd().resolve()
@@ -248,6 +259,19 @@ def create_feature(
                         console.print(f"  cd {main_repo}")
                         console.print(f"  spec-kitty agent create-feature {feature_slug}")
                         break
+            raise typer.Exit(1)
+
+        # Validate feature slug format early (before repo checks).
+        # Required: lowercase kebab-case, starts with a letter.
+        if not re.fullmatch(r"[a-z](?:[a-z0-9-]*[a-z0-9])?", feature_slug):
+            error_msg = (
+                "Invalid feature slug. Use lowercase kebab-case starting with a letter. "
+                "Examples: user-auth, fix-bug-123, new-dashboard"
+            )
+            if json_output:
+                print(json.dumps({"error": error_msg}))
+            else:
+                console.print(f"[red]Error:[/red] {error_msg}")
             raise typer.Exit(1)
 
         repo_root = locate_project_root()
@@ -270,7 +294,7 @@ def create_feature(
 
         # Verify we're on a branch (not detached HEAD)
         current_branch = get_current_branch(repo_root)
-        if not current_branch:
+        if not current_branch or current_branch == "HEAD":
             error_msg = "Must be on a branch to create features (detached HEAD detected)."
             if json_output:
                 print(json.dumps({"error": error_msg}))
@@ -388,16 +412,45 @@ spec-kitty agent tasks move-task WP01 --to doing
         # Commit spec.md to planning branch
         _commit_to_branch(spec_file, feature_slug_formatted, "spec", repo_root, planning_branch, json_output)
 
+        # Create landing branch and initialize meta.json
+        landing_branch = feature_slug_formatted
+        upstream_branch = planning_branch  # e.g., "main"
+
+        meta_file = feature_dir / "meta.json"
+        meta = {}
+        if meta_file.exists():
+            try:
+                meta = json.loads(meta_file.read_text(encoding="utf-8"))
+            except (json.JSONDecodeError, OSError):
+                meta = {}
+
+        # Set landing branch fields in meta.json
+        meta["target_branch"] = landing_branch
+        meta["upstream_branch"] = upstream_branch
+
+        # Create the landing branch from the upstream branch
+        create_branch_result = subprocess.run(
+            ["git", "branch", landing_branch, upstream_branch],
+            cwd=repo_root,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        if create_branch_result.returncode == 0:
+            if not json_output:
+                console.print(f"[green]✓[/green] Created landing branch: {landing_branch} from {upstream_branch}")
+        else:
+            # Branch might already exist
+            branch_exists = subprocess.run(
+                ["git", "rev-parse", "--verify", landing_branch],
+                cwd=repo_root, capture_output=True, check=False,
+            ).returncode == 0
+            if not branch_exists:
+                if not json_output:
+                    console.print(f"[yellow]Warning:[/yellow] Could not create landing branch: {create_branch_result.stderr}")
+
         # T013: Initialize documentation state if mission is documentation
         if mission == "documentation":
-            meta_file = feature_dir / "meta.json"
-            # Create or update meta.json with documentation_state
-            meta = {}
-            if meta_file.exists():
-                try:
-                    meta = json.loads(meta_file.read_text(encoding="utf-8"))
-                except (json.JSONDecodeError, OSError):
-                    meta = {}
             meta.setdefault("mission", "documentation")
             if "documentation_state" not in meta:
                 meta["documentation_state"] = {
@@ -408,25 +461,33 @@ spec-kitty agent tasks move-task WP01 --to doing
                     "last_audit_date": None,
                     "coverage_percentage": 0.0,
                 }
-            meta_file.write_text(json.dumps(meta, indent=2), encoding="utf-8")
-            # Commit meta.json
-            try:
-                _commit_to_branch(meta_file, feature_slug_formatted, "meta", repo_root, planning_branch, json_output)
-            except Exception:
-                pass  # Non-fatal: agent can commit meta.json separately
             if not json_output:
                 console.print("[cyan]→ Documentation state initialized in meta.json[/cyan]")
+
+        # Write meta.json with landing branch + any mission-specific fields
+        meta_file.write_text(
+            json.dumps(meta, indent=2, ensure_ascii=False) + "\n",
+            encoding="utf-8",
+        )
+        # Commit meta.json
+        try:
+            _commit_to_branch(meta_file, feature_slug_formatted, "meta", repo_root, planning_branch, json_output)
+        except Exception:
+            pass  # Non-fatal: agent can commit meta.json separately
 
         if json_output:
             print(json.dumps({
                 "result": "success",
                 "feature": feature_slug_formatted,
-                "feature_dir": str(feature_dir)
+                "feature_dir": str(feature_dir),
+                "landing_branch": landing_branch,
+                "upstream_branch": upstream_branch,
             }))
         else:
             console.print(f"[green]✓[/green] Feature created: {feature_slug_formatted}")
             console.print(f"   Directory: {feature_dir}")
             console.print(f"   Spec committed to {planning_branch}")
+            console.print(f"   Landing branch: {landing_branch} (for WP merges and upstream PR)")
 
     except Exception as e:
         if json_output:
@@ -522,7 +583,12 @@ def setup_plan(
         feature_dir = _find_feature_directory(repo_root, cwd, explicit_feature=feature)
 
         target_branch = _resolve_planning_branch(repo_root, feature_dir)
-        _ensure_branch_checked_out(repo_root, target_branch, json_output)
+        current_branch = _get_current_branch(repo_root)
+        if current_branch != target_branch and not json_output:
+            console.print(
+                f"[yellow]Note:[/yellow] You are on '{current_branch}', feature planning branch is "
+                f"'{target_branch}'. Tasks will commit to '{current_branch}'."
+            )
 
         plan_file = feature_dir / "plan.md"
 
@@ -594,11 +660,13 @@ def setup_plan(
                             )
                             # Commit gap analysis and updated meta.json
                             try:
-                                safe_commit(
-                                    repo_path=repo_root,
-                                    files_to_commit=[gap_analysis_output, meta_file],
-                                    commit_message=f"Add gap analysis for feature {feature_slug}",
-                                    allow_empty=False,
+                                run_command(
+                                    ["git", "add", str(gap_analysis_output), str(meta_file)],
+                                    check_return=True, capture=True, cwd=repo_root,
+                                )
+                                run_command(
+                                    ["git", "commit", "-m", f"Add gap analysis for feature {feature_slug}"],
+                                    check_return=True, capture=True, cwd=repo_root,
                                 )
                             except Exception:
                                 pass  # Non-fatal: agent can commit separately
@@ -641,11 +709,13 @@ def setup_plan(
                 try:
                     set_generators_configured(meta_file, generators_detected)
                     try:
-                        safe_commit(
-                            repo_path=repo_root,
-                            files_to_commit=[meta_file],
-                            commit_message=f"Update generator config for feature {feature_slug}",
-                            allow_empty=False,
+                        run_command(
+                            ["git", "add", str(meta_file)],
+                            check_return=True, capture=True, cwd=repo_root,
+                        )
+                        run_command(
+                            ["git", "commit", "-m", f"Update generator config for feature {feature_slug}"],
+                            check_return=True, capture=True, cwd=repo_root,
                         )
                     except Exception:
                         pass  # Non-fatal
@@ -808,10 +878,16 @@ def _get_current_branch(repo_root: Path) -> str:
         repo_root: Repository root directory
 
     Returns:
-        Current branch name, or primary branch name if detached/not in a repo
+        Current branch name, or 'main' if not in a git repo
     """
-    branch = get_current_branch(repo_root)
-    return branch if branch is not None else _resolve_primary_branch(repo_root)
+    result = subprocess.run(
+        ["git", "rev-parse", "--abbrev-ref", "HEAD"],
+        cwd=repo_root,
+        capture_output=True,
+        text=True,
+        check=False
+    )
+    return result.stdout.strip() if result.returncode == 0 else "main"
 
 
 @app.command(name="accept")
@@ -906,12 +982,12 @@ def merge_feature(
         )
     ] = None,
     target: Annotated[
-        Optional[str],
+        str,
         typer.Option(
             "--target",
-            help="Target branch to merge into (auto-detected if not specified)"
+            help="Target branch to merge into"
         )
-    ] = None,
+    ] = "main",
     strategy: Annotated[
         str,
         typer.Option(
@@ -989,10 +1065,6 @@ def merge_feature(
             print(json.dumps({"error": error, "success": False}))
             sys.exit(1)
 
-        # Resolve target branch dynamically if not specified
-        if target is None:
-            target = _resolve_primary_branch(repo_root)
-
         # Auto-retry logic: Check if we're on a feature branch
         if auto_retry and not os.environ.get("SPEC_KITTY_AUTORETRY"):
             current_branch = _get_current_branch(repo_root)
@@ -1061,6 +1133,71 @@ def merge_feature(
         raise typer.Exit(1)
 
 
+@app.command(name="integrate")
+def integrate_feature(
+    feature: Annotated[
+        Optional[str],
+        typer.Option(
+            "--feature",
+            help="Feature directory slug (auto-detected if not specified)"
+        )
+    ] = None,
+    push: Annotated[
+        bool,
+        typer.Option(
+            "--push",
+            help="Push upstream branch to origin after integrating"
+        )
+    ] = False,
+    strategy: Annotated[
+        str,
+        typer.Option(
+            "--strategy",
+            help="Integration strategy: merge or squash"
+        )
+    ] = "merge",
+    dry_run: Annotated[
+        bool,
+        typer.Option(
+            "--dry-run",
+            help="Show actions without executing"
+        )
+    ] = False,
+) -> None:
+    """Merge a feature's landing branch into the upstream branch (e.g., main).
+
+    This is the second step in the landing branch workflow:
+    1. `spec-kitty merge` merges WP branches into the landing branch
+    2. `spec-kitty integrate` merges the landing branch into upstream (main)
+
+    The landing branch is NEVER deleted. It remains for upstream PR and future changes.
+
+    Examples:
+        # Integrate current feature into main
+        spec-kitty agent feature integrate
+
+        # Integrate specific feature with push
+        spec-kitty agent feature integrate --feature 010-my-feature --push
+
+        # Dry-run mode
+        spec-kitty agent feature integrate --dry-run
+    """
+    from specify_cli.cli.commands.integrate import integrate as top_level_integrate
+
+    try:
+        top_level_integrate(
+            feature=feature,
+            push=push,
+            strategy=strategy,
+            dry_run=dry_run,
+        )
+    except typer.Exit:
+        raise
+    except Exception as e:
+        print(json.dumps({"error": str(e), "success": False}))
+        raise typer.Exit(1)
+
+
 @app.command(name="finalize-tasks")
 def finalize_tasks(
     json_output: Annotated[bool, typer.Option("--json", help="Output JSON format")] = False,
@@ -1087,7 +1224,12 @@ def finalize_tasks(
         cwd = Path.cwd().resolve()
         feature_dir = _find_feature_directory(repo_root, cwd)
         target_branch = _resolve_planning_branch(repo_root, feature_dir)
-        _ensure_branch_checked_out(repo_root, target_branch, json_output)
+        current_branch = _get_current_branch(repo_root)
+        if current_branch != target_branch and not json_output:
+            console.print(
+                f"[yellow]Note:[/yellow] You are on '{current_branch}', feature planning branch is "
+                f"'{target_branch}'. Tasks will commit to '{current_branch}'."
+            )
 
         tasks_dir = feature_dir / "tasks"
         if not tasks_dir.exists():
@@ -1191,21 +1333,28 @@ def finalize_tasks(
                 )
                 files_committed.append(str(tasks_md.relative_to(repo_root)))
 
-            # Get list of all files in tasks_dir to commit
-            files_to_commit = [tasks_dir / f.name for f in tasks_dir.iterdir() if f.is_file()]
-            for f in files_to_commit:
-                files_committed.append(str(f.relative_to(repo_root)))
+            # Get list of WP files before staging
+            wp_files_to_commit = list(tasks_dir.glob("WP*.md"))
+            for wp_f in wp_files_to_commit:
+                files_committed.append(str(wp_f.relative_to(repo_root)))
 
-            # Commit with descriptive message (safe_commit preserves staging area)
-            commit_msg = f"Add tasks for feature {feature_slug}"
-            commit_success = safe_commit(
-                repo_path=repo_root,
-                files_to_commit=files_to_commit,
-                commit_message=commit_msg,
-                allow_empty=False,
+            run_command(
+                ["git", "add", str(tasks_dir)],
+                check_return=True,
+                capture=True,
+                cwd=repo_root
             )
 
-            if commit_success:
+            # Commit with descriptive message (use check_return=False to handle "nothing to commit")
+            commit_msg = f"Add tasks for feature {feature_slug}"
+            returncode_commit, stdout_commit, stderr_commit = run_command(
+                ["git", "commit", "-m", commit_msg],
+                check_return=False,
+                capture=True,
+                cwd=repo_root
+            )
+
+            if returncode_commit == 0:
                 # Commit succeeded - get hash
                 returncode, stdout, stderr = run_command(
                     ["git", "rev-parse", "HEAD"],
@@ -1217,17 +1366,25 @@ def finalize_tasks(
                 commit_created = True
 
                 if not json_output:
-                    console.print(f"[green]✓[/green] Tasks committed to {target_branch}")
+                    console.print(f"[green]✓[/green] Tasks committed to {current_branch}")
                     console.print(f"[dim]Commit: {commit_hash[:7]}[/dim]")
                     console.print(f"[dim]Updated {updated_count} WP files with dependencies[/dim]")
-            else:
-                # safe_commit returned False - either nothing to commit or error
-                # Since allow_empty=False, this means nothing to commit
+            elif "nothing to commit" in stdout_commit or "nothing to commit" in stderr_commit or \
+                 "nothing added to commit" in stdout_commit or "nothing added to commit" in stderr_commit:
+                # Nothing to commit (already committed)
                 commit_created = False
                 commit_hash = None
 
                 if not json_output:
                     console.print("[dim]Tasks unchanged, no commit needed[/dim]")
+            else:
+                # Real error
+                error_output = stderr_commit if stderr_commit else stdout_commit
+                if json_output:
+                    print(json.dumps({"error": f"Git commit failed: {error_output}"}))
+                else:
+                    console.print(f"[red]Error:[/red] Git commit failed: {error_output}")
+                raise typer.Exit(1)
 
         except Exception as e:
             # Unexpected error
