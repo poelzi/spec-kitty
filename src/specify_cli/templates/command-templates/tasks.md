@@ -17,7 +17,7 @@ description: Generate grouped work packages with actionable subtasks and matchin
 # Creates:
 # - kitty-specs/###-feature/tasks/WP01-*.md → In planning repository
 # - kitty-specs/###-feature/tasks/WP02-*.md → In planning repository
-# - Commits ALL to target branch
+# - Commits ALL to planning/base branch
 # - NO worktrees created
 ```
 
@@ -42,14 +42,14 @@ Before proceeding, verify you are in the planning repository:
 git branch --show-current
 ```
 
-**Expected output:** the target branch (meta.json → target_branch), typically `main` or `2.x`
-**If you see a feature branch:** You're in the wrong place. Return to the target branch:
+**Expected output:** the planning/base branch (meta.json → upstream_branch, legacy fallback target_branch)
+**If you see a feature branch:** You're in the wrong place. Return to the planning/base branch:
 ```bash
 cd $(git rev-parse --show-toplevel)
-git checkout <target-branch>
+git checkout <planning-base-branch>
 ```
 
-Work packages are generated directly in `kitty-specs/###-feature/` and committed to the target branch. Worktrees are created later when implementing each work package.
+Work packages are generated directly in `kitty-specs/###-feature/` and committed to the planning/base branch. Worktrees are created later when implementing each work package.
 
 ## Outline
 

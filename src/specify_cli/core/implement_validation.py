@@ -32,7 +32,7 @@ def validate_and_resolve_base(
     This function implements the core dependency validation logic:
     - Multi-parent: Returns (None, True) to trigger auto-merge mode
     - Single parent: Errors if --base not provided, validates if provided
-    - No dependencies: Accepts provided base or None (branches from main)
+    - No dependencies: Accepts provided base or None (branches from landing branch)
 
     Args:
         wp_id: Work package ID (e.g., "WP01")
@@ -43,7 +43,7 @@ def validate_and_resolve_base(
 
     Returns:
         Tuple of (base_to_use, auto_merge_mode):
-        - base_to_use: The base WP ID to use, or None for main/auto-merge
+        - base_to_use: The base WP ID to use, or None for landing/auto-merge
         - auto_merge_mode: True if should create multi-parent merge base
 
     Raises:
@@ -98,7 +98,7 @@ def validate_and_resolve_base(
 
     # No dependencies
     else:
-        # Accept any provided base (or None for main)
+        # Accept any provided base (or None for landing branch)
         return (base, False)
 
 

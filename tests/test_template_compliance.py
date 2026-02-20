@@ -240,3 +240,43 @@ def test_templates_do_not_instruct_manual_lane_moves_to_doing():
         for v in violations:
             msg += f"\n{v['file']}\n  Issue: {v['issue']}\n"
         pytest.fail(msg)
+
+
+def test_specify_plan_tasks_templates_avoid_main_master_branch_names():
+    """Planning templates must use landing/upstream branch terminology.
+
+    Branch routing in feature workflows is metadata-driven (`target_branch` /
+    `upstream_branch`). Hardcoding primary branch names in specify/plan/tasks
+    instructions causes agent drift and wrong branch ancestry.
+    """
+    spec_kitty_root = Path(__file__).parent.parent
+    template_paths = [
+        spec_kitty_root / "src" / "specify_cli" / "missions" / "software-dev" / "command-templates" / "specify.md",
+        spec_kitty_root / "src" / "specify_cli" / "missions" / "software-dev" / "command-templates" / "plan.md",
+        spec_kitty_root / "src" / "specify_cli" / "missions" / "software-dev" / "command-templates" / "tasks.md",
+        spec_kitty_root / "src" / "specify_cli" / "templates" / "command-templates" / "specify.md",
+        spec_kitty_root / "src" / "specify_cli" / "templates" / "command-templates" / "plan.md",
+        spec_kitty_root / "src" / "specify_cli" / "templates" / "command-templates" / "tasks.md",
+    ]
+
+    violations = []
+    pattern = re.compile(r"\b(main|master)\b", re.IGNORECASE)
+
+    for template_path in template_paths:
+        assert template_path.exists(), f"Template missing: {template_path}"
+        for line_num, line in enumerate(template_path.read_text(encoding="utf-8").splitlines(), 1):
+            if pattern.search(line):
+                violations.append(
+                    {
+                        "file": template_path.relative_to(spec_kitty_root),
+                        "line": line_num,
+                        "content": line.strip(),
+                    }
+                )
+
+    if violations:
+        msg = "\n\nBranch naming violations in specify/plan/tasks templates:\n"
+        msg += "Use landing/upstream terminology instead of hardcoded primary branch names.\n"
+        for item in violations:
+            msg += f"\n{item['file']}:{item['line']}\n  {item['content']}\n"
+        pytest.fail(msg)

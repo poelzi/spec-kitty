@@ -36,6 +36,8 @@ from specify_cli.core.context_validation import require_main_repo
 from specify_cli.core.feature_detection import (
     detect_feature,
     FeatureDetectionError,
+    ensure_landing_branch,
+    get_feature_target_branch,
 )
 from specify_cli.core.git_ops import get_current_branch, resolve_target_branch
 from specify_cli.git import safe_commit
@@ -656,7 +658,7 @@ def implement(
                     console.print(f"[red]Error:[/red] {base_workspace} exists but is not a valid worktree")
                     raise typer.Exit(1)
 
-        tracker.complete("validate", f"Base: {base or 'main'}")
+        tracker.complete("validate", f"Base: {base or 'landing branch'}")
     except (FileNotFoundError, typer.Exit) as exc:
         if not isinstance(exc, typer.Exit):
             tracker.error("validate", str(exc))
@@ -798,24 +800,25 @@ def implement(
 
         elif base is None:
             # No dependencies - ensure landing branch model is initialized,
-            # then branch workspace from current branch (respects user context).
-            from specify_cli.core.feature_detection import ensure_landing_branch
-
-            landing_branch: str | None = None
+            # then branch workspace from the landing branch.
             try:
-                landing_branch = ensure_landing_branch(repo_root, feature_slug)
-                console.print(f"[cyan]→ Using landing branch: {landing_branch}[/cyan]")
+                base_branch = ensure_landing_branch(repo_root, feature_slug)
+                console.print(f"[cyan]→ Using landing branch: {base_branch}[/cyan]")
             except RuntimeError as e:
                 console.print(f"[yellow]Warning:[/yellow] {e}")
-
-            current_branch_name = get_current_branch(repo_root)
-            if current_branch_name is None:
-                if landing_branch is None:
-                    raise RuntimeError("Could not determine current branch")
-                current_branch_name = landing_branch
-
-            # Use current branch as base (no auto-checkout to target)
-            base_branch = current_branch_name
+                # Fall back to feature target branch metadata, then current branch.
+                base_branch = get_feature_target_branch(repo_root, feature_slug)
+                verify_result = subprocess.run(
+                    ["git", "rev-parse", "--verify", base_branch],
+                    cwd=repo_root,
+                    capture_output=True,
+                    check=False,
+                )
+                if verify_result.returncode != 0:
+                    current_branch_name = get_current_branch(repo_root)
+                    if current_branch_name is None:
+                        raise RuntimeError("Could not determine base branch")
+                    base_branch = current_branch_name
         else:
             # Has dependencies - check if base is merged or in-progress
             try:

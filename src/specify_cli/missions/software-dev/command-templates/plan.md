@@ -16,7 +16,7 @@ description: Execute the implementation planning workflow using the plan templat
 
 # Creates:
 # - kitty-specs/###-feature/plan.md → In planning repository
-# - Commits to target branch
+# - Commits to planning/base branch
 # - NO worktrees created
 ```
 
@@ -34,9 +34,9 @@ You **MUST** consider the user input before proceeding (if not empty).
 
 This command runs in the **planning repository**, not in a worktree.
 
-- Verify you're on the target branch (meta.json → target_branch) before scaffolding plan.md
+- Verify you're on the planning/base branch (meta.json → upstream_branch, legacy fallback target_branch) before scaffolding plan.md
 - Planning artifacts live in `kitty-specs/###-feature/`
-- The plan template is committed to the target branch after generation
+- The plan template is committed to the planning/base branch after generation
 
 **Path reference rule:** When you mention directories or files, provide either the absolute path or a path relative to the project root (for example, `kitty-specs/<feature>/tasks/`). Never refer to a folder by name alone.
 

@@ -18,9 +18,11 @@ from specify_cli.core.dependency_graph import build_dependency_graph, get_depend
 from specify_cli.core.feature_detection import (
     FeatureDetectionError,
     detect_feature_slug,
+    ensure_landing_branch,
     get_feature_target_branch,
     get_feature_upstream_branch,
 )
+from specify_cli.core.git_ops import resolve_primary_branch as resolve_repo_primary_branch
 from specify_cli.core.implement_validation import (
     validate_and_resolve_base,
     validate_base_workspace_exists,
@@ -66,18 +68,12 @@ app = typer.Typer(
 
 
 def _resolve_primary_branch(repo_root: Path) -> str:
-    """Resolve the primary branch name (main or master)."""
-    for candidate in ("main", "master"):
-        result = subprocess.run(
-            ["git", "rev-parse", "--verify", candidate],
-            cwd=repo_root,
-            capture_output=True,
-            check=False,
-        )
-        if result.returncode == 0:
-            return candidate
-    print("Error: Could not find main or master branch")
-    raise typer.Exit(1)
+    """Resolve the repository primary branch name."""
+    try:
+        return resolve_repo_primary_branch(repo_root)
+    except Exception:
+        print("Error: Could not determine the repository primary branch.")
+        raise typer.Exit(1)
 
 
 def _ensure_target_branch_checked_out(
@@ -121,7 +117,8 @@ def _ensure_target_branch_checked_out(
     target_branch = planning_branch or current_branch
 
     if current_branch != target_branch:
-        if target_branch not in ["main", "master"]:
+        primary_branch = _resolve_primary_branch(main_repo_root)
+        if target_branch != primary_branch:
             branch_exists_result = subprocess.run(
                 ["git", "rev-parse", "--verify", target_branch],
                 cwd=main_repo_root,
@@ -129,7 +126,6 @@ def _ensure_target_branch_checked_out(
                 check=False,
             )
             if branch_exists_result.returncode != 0:
-                primary_branch = _resolve_primary_branch(main_repo_root)
                 create_result = subprocess.run(
                     ["git", "branch", target_branch, primary_branch],
                     cwd=main_repo_root,
@@ -642,7 +638,6 @@ def implement(
             wp.path.write_text(updated_doc, encoding="utf-8")
 
             # Auto-commit to target branch (enables instant status sync)
-            import subprocess
 
             actual_wp_path = wp.path.resolve()
             commit_result = subprocess.run(
@@ -689,9 +684,47 @@ def implement(
         workspace_name = f"{feature_slug}-{normalized_wp_id}"
         workspace_path = repo_root / ".worktrees" / workspace_name
 
+        # Resolve workspace base ref for direct git worktree creation path.
+        # For first WPs (no dependency base), this MUST be the feature landing
+        # branch, not the currently checked-out planning branch.
+        workspace_base_ref: str
+        if resolved_base:
+            workspace_base_ref = f"{feature_slug}-{resolved_base}"
+        else:
+            try:
+                workspace_base_ref = ensure_landing_branch(repo_root, feature_slug)
+            except RuntimeError as e:
+                print(f"Warning: {e}")
+                workspace_base_ref = get_feature_target_branch(repo_root, feature_slug)
+
+        in_git_worktree = (
+            subprocess.run(
+                ["git", "rev-parse", "--is-inside-work-tree"],
+                cwd=repo_root,
+                capture_output=True,
+                text=True,
+                check=False,
+            ).returncode
+            == 0
+        )
+        if in_git_worktree:
+            base_ref_exists = (
+                subprocess.run(
+                    ["git", "rev-parse", "--verify", workspace_base_ref],
+                    cwd=repo_root,
+                    capture_output=True,
+                    check=False,
+                ).returncode
+                == 0
+            )
+            if not base_ref_exists:
+                print(
+                    f"Error: Could not resolve workspace base branch '{workspace_base_ref}'"
+                )
+                raise typer.Exit(1)
+
         # Ensure workspace exists (create if needed)
         if not workspace_path.exists():
-            import subprocess
 
             # Ensure .worktrees directory exists
             worktrees_dir = repo_root / ".worktrees"
@@ -700,7 +733,15 @@ def implement(
             # Create worktree with sparse-checkout
             branch_name = workspace_name
             result = subprocess.run(
-                ["git", "worktree", "add", str(workspace_path), "-b", branch_name],
+                [
+                    "git",
+                    "worktree",
+                    "add",
+                    str(workspace_path),
+                    "-b",
+                    branch_name,
+                    workspace_base_ref,
+                ],
                 cwd=repo_root,
                 capture_output=True,
                 text=True,
@@ -763,7 +804,7 @@ def implement(
                     else:
                         gitignore_path.write_text(gitignore_entry, encoding="utf-8")
 
-                print(f"✓ Created workspace: {workspace_path}")
+                print(f"✓ Created workspace: {workspace_path} (base: {workspace_base_ref})")
 
         # ALWAYS validate sparse-checkout (fixes legacy worktrees that were created
         # without sparse-checkout or where setup failed silently)

@@ -232,15 +232,24 @@ def _find_feature_directory(repo_root: Path, cwd: Path, explicit_feature: str | 
 def create_feature(
     feature_slug: Annotated[str, typer.Argument(help="Feature slug (e.g., 'user-auth')")],
     mission: Annotated[Optional[str], typer.Option("--mission", help="Mission type (e.g., 'documentation', 'software-dev')")] = None,
+    upstream_branch: Annotated[
+        Optional[str],
+        typer.Option(
+            "--upstream-branch",
+            "--base-branch",
+            help="Planning/base branch for this feature (defaults to current branch)",
+        ),
+    ] = None,
     json_output: Annotated[bool, typer.Option("--json", help="Output JSON format")] = False,
 ) -> None:
     """Create new feature directory structure in planning repository.
 
     This command is designed for AI agents to call programmatically.
-    Creates feature directory in kitty-specs/ and commits to the current branch.
+    Creates feature directory in kitty-specs/ and commits to the planning/base branch.
 
     Examples:
         spec-kitty agent create-feature "new-dashboard" --json
+        spec-kitty agent create-feature "nats-transport" --upstream-branch 001-otel --json
     """
     try:
         # GUARD: Refuse to run from inside a worktree (must be in planning repo)
@@ -301,7 +310,51 @@ def create_feature(
             else:
                 console.print(f"[red]Error:[/red] {error_msg}")
             raise typer.Exit(1)
-        planning_branch = current_branch
+        planning_branch = upstream_branch or current_branch
+
+        # If an explicit planning/base branch is provided, ensure it exists and
+        # switch to it before creating/committing planning artifacts.
+        if planning_branch != current_branch:
+            branch_exists = subprocess.run(
+                ["git", "rev-parse", "--verify", planning_branch],
+                cwd=repo_root,
+                capture_output=True,
+                check=False,
+            ).returncode == 0
+
+            if not branch_exists:
+                error_msg = (
+                    f"Planning/base branch '{planning_branch}' does not exist. "
+                    "Create or fetch it first, then retry."
+                )
+                if json_output:
+                    print(json.dumps({"error": error_msg}))
+                else:
+                    console.print(f"[red]Error:[/red] {error_msg}")
+                raise typer.Exit(1)
+
+            checkout_result = subprocess.run(
+                ["git", "checkout", planning_branch],
+                cwd=repo_root,
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            if checkout_result.returncode != 0:
+                error_msg = (
+                    f"Could not checkout planning/base branch '{planning_branch}': "
+                    f"{checkout_result.stderr or checkout_result.stdout}"
+                )
+                if json_output:
+                    print(json.dumps({"error": error_msg}))
+                else:
+                    console.print(f"[red]Error:[/red] {error_msg}")
+                raise typer.Exit(1)
+
+            if not json_output:
+                console.print(
+                    f"[cyan]-> Using planning/base branch: {planning_branch}[/cyan]"
+                )
 
         # Get next feature number
         feature_number = get_next_feature_number(repo_root)
@@ -562,7 +615,7 @@ def setup_plan(
     """Scaffold implementation plan template in planning repository.
 
     This command is designed for AI agents to call programmatically.
-    Creates plan.md and commits to target branch.
+    Creates plan.md and commits to the planning/base branch.
 
     Examples:
         spec-kitty agent setup-plan --json
@@ -582,13 +635,8 @@ def setup_plan(
         cwd = Path.cwd().resolve()
         feature_dir = _find_feature_directory(repo_root, cwd, explicit_feature=feature)
 
-        target_branch = _resolve_planning_branch(repo_root, feature_dir)
-        current_branch = _get_current_branch(repo_root)
-        if current_branch != target_branch and not json_output:
-            console.print(
-                f"[yellow]Note:[/yellow] You are on '{current_branch}', feature planning branch is "
-                f"'{target_branch}'. Tasks will commit to '{current_branch}'."
-            )
+        planning_branch = _resolve_planning_branch(repo_root, feature_dir)
+        _ensure_branch_checked_out(repo_root, planning_branch, json_output)
 
         plan_file = feature_dir / "plan.md"
 
@@ -616,7 +664,7 @@ def setup_plan(
 
         # Commit plan.md to target branch
         feature_slug = feature_dir.name
-        _commit_to_branch(plan_file, feature_slug, "plan", repo_root, target_branch, json_output)
+        _commit_to_branch(plan_file, feature_slug, "plan", repo_root, planning_branch, json_output)
 
         # T014 + T016: Documentation mission wiring for plan
         mission_key = get_feature_mission_key(feature_dir)
@@ -1202,7 +1250,7 @@ def integrate_feature(
 def finalize_tasks(
     json_output: Annotated[bool, typer.Option("--json", help="Output JSON format")] = False,
 ) -> None:
-    """Parse dependencies from tasks.md and update WP frontmatter, then commit to target branch.
+    """Parse dependencies from tasks.md and update WP frontmatter, then commit to planning/base branch.
 
     This command is designed to be called after LLM generates WP files via /spec-kitty.tasks.
     It post-processes the generated files to add dependency information and commits everything.
@@ -1223,13 +1271,8 @@ def finalize_tasks(
         # Determine feature directory
         cwd = Path.cwd().resolve()
         feature_dir = _find_feature_directory(repo_root, cwd)
-        target_branch = _resolve_planning_branch(repo_root, feature_dir)
-        current_branch = _get_current_branch(repo_root)
-        if current_branch != target_branch and not json_output:
-            console.print(
-                f"[yellow]Note:[/yellow] You are on '{current_branch}', feature planning branch is "
-                f"'{target_branch}'. Tasks will commit to '{current_branch}'."
-            )
+        planning_branch = _resolve_planning_branch(repo_root, feature_dir)
+        _ensure_branch_checked_out(repo_root, planning_branch, json_output)
 
         tasks_dir = feature_dir / "tasks"
         if not tasks_dir.exists():
@@ -1366,7 +1409,9 @@ def finalize_tasks(
                 commit_created = True
 
                 if not json_output:
-                    console.print(f"[green]✓[/green] Tasks committed to {current_branch}")
+                    console.print(
+                        f"[green]✓[/green] Tasks committed to {planning_branch}"
+                    )
                     console.print(f"[dim]Commit: {commit_hash[:7]}[/dim]")
                     console.print(f"[dim]Updated {updated_count} WP files with dependencies[/dim]")
             elif "nothing to commit" in stdout_commit or "nothing to commit" in stderr_commit or \

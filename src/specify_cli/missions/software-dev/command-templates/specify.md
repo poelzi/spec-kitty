@@ -16,7 +16,7 @@ cd /path/to/project/root  # Your planning repository
 
 # All planning artifacts are created in the planning repo and committed:
 # - kitty-specs/###-feature/spec.md → Created in planning repo
-# - Committed to target branch (meta.json → target_branch)
+# - Committed to planning/base branch (meta.json → upstream_branch, legacy fallback target_branch)
 # - NO worktrees created
 ```
 
@@ -98,7 +98,7 @@ Store the final mission selection in your notes and include it in the spec outpu
 **Planning happens in the planning repository - NO worktree created!**
 
 1. Creates `kitty-specs/###-feature/spec.md` directly in planning repo
-2. Automatically commits to target branch
+2. Automatically commits to planning/base branch
 3. No worktree created during specify
 
 **Worktrees created later**: Use `spec-kitty implement WP##` to create a workspace for each work package. Worktrees are created later during implement (e.g., `.worktrees/###-feature-WP##`).
@@ -107,7 +107,7 @@ Store the final mission selection in your notes and include it in the spec outpu
 
 - Work in: **Planning repository** (not a worktree)
 - Creates: `kitty-specs/###-feature/spec.md`
-- Commits to: target branch (`meta.json` → `target_branch`)
+- Commits to: planning/base branch (`meta.json` → `upstream_branch`, legacy fallback `target_branch`)
 
 ## Outline
 
@@ -129,45 +129,43 @@ Given that feature description, do this:
    - Only proceed once every discovery question has an explicit answer and the user has acknowledged the Intent Summary.
    - Empty invocation rule: stay in interview mode until you can restate the agreed-upon feature description. Do **not** call the creation command while the description is missing or provisional.
 
-2. When discovery is complete and the intent summary, **title**, and **mission** are confirmed, run the feature creation command from repo root:
+2. When discovery is complete and the intent summary, **title**, and **mission** are confirmed, identify branch routing:
+
+   - **Base/planning branch**: Use the branch explicitly requested by the user for this feature. If the user did not name one, use the currently checked-out branch.
+   - **Landing branch**: Use the generated feature slug (`###-<slug>`). This is where WP branches merge.
+
+3. Run the feature creation command from repo root:
 
    ```bash
-   spec-kitty agent feature create-feature "<slug>" --json
+   spec-kitty agent feature create-feature "<slug>" --upstream-branch "<base-branch>" --json
    ```
 
-   Where `<slug>` is a kebab-case version of the friendly title (e.g., "Checkout Upsell Flow" → "checkout-upsell-flow").
+   If the user did not provide an explicit base branch, omit `--upstream-branch` and rely on the current branch.
+
+   Where `<slug>` is a kebab-case version of the friendly title (e.g., "Checkout Upsell Flow" -> "checkout-upsell-flow").
 
    The command returns JSON with:
    - `result`: "success" or error message
    - `feature`: Feature number and slug (e.g., "014-checkout-upsell-flow")
-   - `feature_dir`: Absolute path to the feature directory inside the main repo
+   - `feature_dir`: Absolute path to the feature directory inside the planning repository
+   - `landing_branch`: Feature landing branch name
+   - `upstream_branch`: Planning/base branch name
 
    Parse these values for use in subsequent steps. All file paths are absolute.
 
    **IMPORTANT**: You must only ever run this command once. The JSON is provided in the terminal output - always refer to it to get the actual paths you're looking for.
-3. **Stay in the main repository**: No worktree is created during specify.
+4. **Stay in the planning repository**: No worktree is created during specify.
 
-4. The spec template is bundled with spec-kitty at `src/specify_cli/missions/software-dev/templates/spec-template.md`. The template defines required sections for software development features.
+5. The spec template is bundled with spec-kitty at `src/specify_cli/missions/software-dev/templates/spec-template.md`. The template defines required sections for software development features.
 
-5. Create meta.json in the feature directory with:
-   ```json
-   {
-     "feature_number": "<number>",
-     "slug": "<full-slug>",
-     "friendly_name": "<Friendly Title>",
-     "mission": "<selected-mission>",
-     "source_description": "$ARGUMENTS",
-     "created_at": "<ISO timestamp>",
-     "target_branch": "main",
-     "vcs": "git"
-   }
-   ```
+6. Do not overwrite branch routing metadata in `meta.json`.
 
-   **CRITICAL**: Always set these fields explicitly:
-   - `target_branch`: Set to "main" by default (user can change to "2.x" for dual-branch features)
-   - `vcs`: Set to "git" by default (enables VCS locking and prevents jj fallback)
+   - `spec-kitty agent feature create-feature` is the source of truth for:
+     - `target_branch` (landing branch)
+     - `upstream_branch` (planning/base branch)
+   - If you need to update non-branch metadata fields, edit only those fields and preserve branch routing.
 
-6. Generate the specification content by following this flow:
+7. Generate the specification content by following this flow:
     - Use the discovery answers as your authoritative source of truth (do **not** rely on raw `$ARGUMENTS`)
     - For empty invocations, treat the synthesized interview summary as the canonical feature description
     - Identify: actors, actions, data, constraints, motivations, success metrics
@@ -181,9 +179,9 @@ Given that feature description, do this:
     - Define Success Criteria (measurable, technology-agnostic outcomes)
     - Identify Key Entities (if data involved)
 
-7. Write the specification to `<feature_dir>/spec.md` using the template structure, replacing placeholders with concrete details derived from the feature description while preserving section order and headings.
+8. Write the specification to `<feature_dir>/spec.md` using the template structure, replacing placeholders with concrete details derived from the feature description while preserving section order and headings.
 
-8. **Specification Quality Validation**: After writing the initial spec, validate it against quality criteria:
+9. **Specification Quality Validation**: After writing the initial spec, validate it against quality criteria:
 
    a. **Create Spec Quality Checklist**: Generate a checklist file at `FEATURE_DIR/checklists/requirements.md` using the checklist template structure with these validation items:
    
@@ -259,7 +257,7 @@ Given that feature description, do this:
    
    d. **Update Checklist**: After each validation iteration, update the checklist file with current pass/fail status
 
-9. Report completion with feature directory, spec file path, checklist results, and readiness for the next phase (`/spec-kitty.clarify` or `/spec-kitty.plan`).
+10. Report completion with feature directory, spec file path, checklist results, and readiness for the next phase (`/spec-kitty.clarify` or `/spec-kitty.plan`).
 
 **NOTE:** The script creates and checks out the new branch and initializes the spec file before writing.
 
