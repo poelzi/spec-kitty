@@ -131,12 +131,14 @@ def test_implement_respects_current_branch(tmp_path):
     assert worktree.exists(), "Worktree not created"
 
 
-def test_worktree_base_branch_is_current(tmp_path):
-    """Test that worktree is created from current branch, not main.
+def test_worktree_base_branch_is_landing(tmp_path):
+    """Test that worktree is created from the landing branch (v0.15.0+).
 
     Validates:
-    - Worktree base branch is user's current branch
-    - Base is NOT auto-switched to main
+    - Worktree base branch is the feature's landing branch (feature slug)
+    - Base is NOT the user's current branch or main
+    - Landing branch model: WPs branch from the landing branch, not from
+      whatever branch the user happens to be on
     """
     repo = tmp_path / "repo"
     repo.mkdir()
@@ -170,9 +172,10 @@ def test_worktree_base_branch_is_current(tmp_path):
     workspace_context_file = repo / ".kittify" / "workspaces" / "002-test-feature-WP01.json"
     if workspace_context_file.exists():
         context_data = json.loads(workspace_context_file.read_text())
-        # Base branch should be 'develop' (current), not 'main' (target)
-        assert context_data.get("base_branch") == "develop", \
-            f"Base branch should be 'develop', got {context_data.get('base_branch')}"
+        # In v0.15.0+ landing branch model, WPs branch from the landing branch
+        # (feature slug), not from the user's current branch or main
+        assert context_data.get("base_branch") == "002-test-feature", \
+            f"Base branch should be '002-test-feature' (landing branch), got {context_data.get('base_branch')}"
 
 
 def test_status_commits_respect_current_branch(tmp_path):
@@ -283,14 +286,14 @@ def test_notification_when_current_differs_from_target(tmp_path):
         "No branch notification in output"
 
 
-def test_finalize_tasks_respects_current_branch(tmp_path):
-    """Test that finalize-tasks commits to current branch, not auto-switched to main.
+def test_finalize_tasks_commits_to_planning_branch(tmp_path):
+    """Test that finalize-tasks commits to the planning branch from meta.json.
 
     Validates:
-    - User is on 'feature/planning' branch
-    - Feature targets 'main'
-    - finalize-tasks command commits to current branch (not main)
-    - User stays on 'feature/planning' after command
+    - User starts on 'feature/planning' branch
+    - Feature's planning branch is 'main' (from meta.json target_branch)
+    - finalize-tasks auto-checkouts to the planning branch (main) to commit
+    - Planning artifacts land on 'main', not the user's original branch
     """
     import yaml
 
@@ -356,43 +359,7 @@ def test_finalize_tasks_respects_current_branch(tmp_path):
     subprocess.run(["git", "add", "."], cwd=repo, check=True, capture_output=True)
     subprocess.run(["git", "commit", "-m", "Add 005-test-feature"], cwd=repo, check=True, capture_output=True)
 
-    # Create and switch to planning branch
-    subprocess.run(["git", "checkout", "-b", "feature/planning"], cwd=repo, check=True, capture_output=True)
-
-    # Verify we're on planning branch
-    assert get_current_branch(repo) == "feature/planning"
-
-    # Get commit count before finalize
-    result = subprocess.run(
-        ["git", "rev-list", "--count", "HEAD"],
-        cwd=repo,
-        capture_output=True,
-        text=True,
-        check=True,
-    )
-    commits_before = int(result.stdout.strip())
-
-    # Run finalize-tasks command
-    result = run_cli(repo, "agent", "feature", "finalize-tasks", "--json")
-
-    # Should succeed
-    assert result.returncode == 0, f"finalize-tasks failed: {result.stderr}"
-
-    # User should still be on planning branch (no auto-checkout)
-    assert get_current_branch(repo) == "feature/planning", "Command auto-switched branch unexpectedly"
-
-    # Verify commit landed on planning branch (not main)
-    result = subprocess.run(
-        ["git", "rev-list", "--count", "feature/planning"],
-        cwd=repo,
-        capture_output=True,
-        text=True,
-        check=True,
-    )
-    commits_after = int(result.stdout.strip())
-    assert commits_after == commits_before + 1, "Finalize commit not on feature/planning branch"
-
-    # Verify main hasn't changed (still at original commit count)
+    # Get main commit count before finalize
     result = subprocess.run(
         ["git", "rev-list", "--count", "main"],
         cwd=repo,
@@ -400,8 +367,36 @@ def test_finalize_tasks_respects_current_branch(tmp_path):
         text=True,
         check=True,
     )
-    main_commits = int(result.stdout.strip())
-    assert main_commits == commits_before, "Commit incorrectly landed on main"
+    main_commits_before = int(result.stdout.strip())
+
+    # Create and switch to a different branch
+    subprocess.run(["git", "checkout", "-b", "feature/planning"], cwd=repo, check=True, capture_output=True)
+
+    # Verify we're on planning branch
+    assert get_current_branch(repo) == "feature/planning"
+
+    # Run finalize-tasks command
+    result = run_cli(repo, "agent", "feature", "finalize-tasks", "--json")
+
+    # Should succeed
+    assert result.returncode == 0, f"finalize-tasks failed: {result.stderr}"
+
+    # finalize-tasks auto-checkouts to the planning branch (main) to commit
+    # planning artifacts — this is correct behavior for the landing branch model
+    assert get_current_branch(repo) == "main", \
+        f"Expected checkout to planning branch 'main', got '{get_current_branch(repo)}'"
+
+    # Verify commit landed on main (the planning branch)
+    result = subprocess.run(
+        ["git", "rev-list", "--count", "main"],
+        cwd=repo,
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    main_commits_after = int(result.stdout.strip())
+    assert main_commits_after == main_commits_before + 1, \
+        "Finalize commit should land on the planning branch (main)"
 
 
 if __name__ == "__main__":

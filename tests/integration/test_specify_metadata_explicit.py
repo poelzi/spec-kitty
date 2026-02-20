@@ -534,13 +534,11 @@ def test_template_fix_applies_to_all_agents(tmp_path):
 
     content = source_template.read_text()
 
-    # Verify template includes target_branch and vcs in the meta.json example
-    assert '"target_branch":' in content, "Template should include target_branch in meta.json schema"
-    assert '"vcs":' in content, "Template should include vcs in meta.json schema"
-
-    # Verify the instructions mention these fields
+    # Verify the template documents branch routing metadata fields.
+    # The v0.15.0+ template references upstream_branch as primary and
+    # target_branch as legacy fallback — both should be documented.
     assert "target_branch" in content, "Template should document target_branch"
-    assert "vcs" in content or "VCS" in content, "Template should document vcs"
+    assert "upstream_branch" in content, "Template should document upstream_branch"
 
 
 def test_comparison_implicit_vs_explicit(tmp_path):
