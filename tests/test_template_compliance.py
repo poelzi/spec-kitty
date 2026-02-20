@@ -243,30 +243,50 @@ def test_templates_do_not_instruct_manual_lane_moves_to_doing():
 
 
 def test_specify_plan_tasks_templates_avoid_main_master_branch_names():
-    """Planning templates must use landing/upstream branch terminology.
+    """Specify/plan/tasks templates must use metadata-driven branch routing.
 
-    Branch routing in feature workflows is metadata-driven (`target_branch` /
-    `upstream_branch`). Hardcoding primary branch names in specify/plan/tasks
-    instructions causes agent drift and wrong branch ancestry.
+    Branch routing is defined in `meta.json` (`upstream_branch` +
+    `target_branch`). Any hardcoded primary branch names in mission templates
+    causes incorrect agent behavior and branch ancestry drift.
     """
     spec_kitty_root = Path(__file__).parent.parent
-    template_paths = [
-        spec_kitty_root / "src" / "specify_cli" / "missions" / "software-dev" / "command-templates" / "specify.md",
-        spec_kitty_root / "src" / "specify_cli" / "missions" / "software-dev" / "command-templates" / "plan.md",
-        spec_kitty_root / "src" / "specify_cli" / "missions" / "software-dev" / "command-templates" / "tasks.md",
-        spec_kitty_root / "src" / "specify_cli" / "templates" / "command-templates" / "specify.md",
-        spec_kitty_root / "src" / "specify_cli" / "templates" / "command-templates" / "plan.md",
-        spec_kitty_root / "src" / "specify_cli" / "templates" / "command-templates" / "tasks.md",
-    ]
+    template_paths: list[Path] = []
 
-    violations = []
-    pattern = re.compile(r"\b(main|master)\b", re.IGNORECASE)
+    missions_dir = spec_kitty_root / "src" / "specify_cli" / "missions"
+    for mission_dir in sorted(missions_dir.iterdir()):
+        cmd_templates = mission_dir / "command-templates"
+        if not cmd_templates.exists():
+            continue
+        for name in ("specify.md", "plan.md", "tasks.md"):
+            template_path = cmd_templates / name
+            if template_path.exists():
+                template_paths.append(template_path)
+
+    root_cmd_templates = (
+        spec_kitty_root / "src" / "specify_cli" / "templates" / "command-templates"
+    )
+    for name in ("specify.md", "plan.md", "tasks.md"):
+        template_path = root_cmd_templates / name
+        if template_path.exists():
+            template_paths.append(template_path)
+
+    assert template_paths, "No specify/plan/tasks templates found"
+
+    branch_name_violations = []
+    missing_upstream_branch_references = []
+    forbidden_branch_pattern = re.compile(r"\b(main|master)\b", re.IGNORECASE)
 
     for template_path in template_paths:
-        assert template_path.exists(), f"Template missing: {template_path}"
-        for line_num, line in enumerate(template_path.read_text(encoding="utf-8").splitlines(), 1):
-            if pattern.search(line):
-                violations.append(
+        content = template_path.read_text(encoding="utf-8")
+
+        if "upstream_branch" not in content:
+            missing_upstream_branch_references.append(
+                template_path.relative_to(spec_kitty_root)
+            )
+
+        for line_num, line in enumerate(content.splitlines(), 1):
+            if forbidden_branch_pattern.search(line):
+                branch_name_violations.append(
                     {
                         "file": template_path.relative_to(spec_kitty_root),
                         "line": line_num,
@@ -274,9 +294,16 @@ def test_specify_plan_tasks_templates_avoid_main_master_branch_names():
                     }
                 )
 
-    if violations:
+    if branch_name_violations:
         msg = "\n\nBranch naming violations in specify/plan/tasks templates:\n"
-        msg += "Use landing/upstream terminology instead of hardcoded primary branch names.\n"
-        for item in violations:
+        msg += "Use metadata-driven branch routing terms instead of hardcoded primary branch names.\n"
+        for item in branch_name_violations:
             msg += f"\n{item['file']}:{item['line']}\n  {item['content']}\n"
+        pytest.fail(msg)
+
+    if missing_upstream_branch_references:
+        msg = "\n\nMissing upstream_branch references in specify/plan/tasks templates:\n"
+        msg += "Each template must reference meta.json -> upstream_branch so branch routing stays explicit.\n"
+        for path in missing_upstream_branch_references:
+            msg += f"\n{path}\n"
         pytest.fail(msg)

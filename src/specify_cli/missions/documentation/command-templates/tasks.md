@@ -17,13 +17,13 @@ You **MUST** consider the user input before proceeding (if not empty).
 
 ## Location Pre-flight Check
 
-Verify you are in the main repository (not a worktree). Task generation happens in main for ALL missions.
+Verify you are in the planning repository (not a worktree). Task generation happens on the planning/base branch for all missions.
 
 ```bash
-git branch --show-current  # Should show "main"
+git branch --show-current  # Should show planning/base branch (meta.json -> upstream_branch, legacy fallback target_branch)
 ```
 
-**Note**: Task generation in main is standard for all spec-kitty missions. Implementation happens in per-WP worktrees.
+**Note**: Task generation on the planning/base branch is standard for all spec-kitty missions. Implementation happens in per-WP worktrees.
 
 ---
 

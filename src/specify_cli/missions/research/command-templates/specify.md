@@ -15,8 +15,8 @@ description: Create or update the research specification from a natural language
 cd /path/to/project/root  # Your planning repository
 
 # All planning artifacts are created in the planning repo and committed:
-# - kitty-specs/###-feature/spec.md → Created in planning repo
-# - Committed to target branch (meta.json → target_branch)
+# - kitty-specs/###-feature/spec.md -> Created in planning repo
+# - Committed to planning/base branch (meta.json -> upstream_branch, legacy fallback target_branch)
 # - NO worktrees created
 ```
 
@@ -90,8 +90,8 @@ During discovery, you MUST ask:
 **Planning happens in the planning repository - NO worktree created!**
 
 1. Creates `kitty-specs/###-feature/spec.md` directly in planning repo
-2. Creates `kitty-specs/###-feature/meta.json` with `deliverables_path`
-3. Automatically commits to target branch
+2. Updates `kitty-specs/###-feature/meta.json` with `deliverables_path` (without overwriting branch routing fields)
+3. Automatically commits to planning/base branch
 4. No worktree created during specify
 
 **Worktrees created later**: Use `spec-kitty implement WP##` to create a workspace for each work package.
@@ -100,7 +100,7 @@ During discovery, you MUST ask:
 
 - Work in: **Planning repository** (not a worktree)
 - Creates: `kitty-specs/###-feature/spec.md`
-- Commits to: target branch (`meta.json` → `target_branch`)
+- Commits to: planning/base branch (`meta.json` -> `upstream_branch`, legacy fallback `target_branch`)
 
 ## Outline
 
@@ -115,29 +115,38 @@ During discovery, you MUST ask:
 - Determine deliverables_path (ask user or use default)
 - Confirm Intent Summary with user
 
-### 2. Create Feature
+### 2. Create Feature and branch routing
 
-When discovery is complete, run:
+When discovery is complete, resolve branch routing:
+
+- **Base/planning branch**: Use the branch explicitly requested by the user. If none was provided, use the currently checked-out branch.
+- **Landing branch**: Use the generated feature slug (`###-<slug>`). This is where WP branches merge.
+
+Then run:
 
 ```bash
-spec-kitty agent feature create-feature "<slug>" --json
+spec-kitty agent feature create-feature "<slug>" --mission research --upstream-branch "<base-branch>" --json
 ```
 
-Parse the JSON output for `feature` and `feature_dir`.
+If the user did not provide an explicit base branch, omit `--upstream-branch` and rely on the current branch.
 
-### 3. Create meta.json with deliverables_path
+Parse the JSON output for `feature`, `feature_dir`, `landing_branch`, and `upstream_branch`.
 
-**CRITICAL**: Include `deliverables_path` in meta.json:
+### 3. Update meta.json with deliverables_path
+
+**CRITICAL**: Update the existing `meta.json` file created by `create-feature`; do not recreate it from scratch.
+
+Preserve branch routing fields:
+- `target_branch` (landing branch)
+- `upstream_branch` (planning/base branch)
+
+Ensure `meta.json` includes `deliverables_path`:
 
 ```json
 {
-  "feature_number": "<number>",
-  "slug": "<full-slug>",
-  "friendly_name": "<Research Title>",
   "mission": "research",
   "deliverables_path": "<confirmed-path>",
-  "source_description": "$ARGUMENTS",
-  "created_at": "<ISO timestamp>"
+  "source_description": "$ARGUMENTS"
 }
 ```
 
@@ -150,7 +159,9 @@ Example with default path:
   "mission": "research",
   "deliverables_path": "docs/research/018-market-research/",
   "source_description": "Research the competitive landscape",
-  "created_at": "2025-01-25T10:00:00Z"
+  "created_at": "2025-01-25T10:00:00Z",
+  "target_branch": "018-market-research",
+  "upstream_branch": "<planning-base-branch>"
 }
 ```
 

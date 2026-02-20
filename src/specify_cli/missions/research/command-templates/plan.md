@@ -18,9 +18,9 @@ Before proceeding with planning, verify you are in the correct working directory
 ```
 
 **What this validates**:
-- Current branch follows the feature pattern like `001-feature-name`
-- You're not attempting to run from `main` or any release branch
-- The validator prints clear navigation instructions if you're outside the feature worktree
+- You are in the planning repository (not a worktree)
+- Current branch matches the planning/base branch (`meta.json` -> `upstream_branch`, legacy fallback `target_branch`)
+- The validator prints clear navigation instructions if you are outside the planning repository or on the wrong branch
 
 **Path reference rule:** When you mention directories or files, provide either the absolute path or a path relative to the project root (for example, `kitty-specs/<feature>/tasks/`). Never refer to a folder by name alone.
 
