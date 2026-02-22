@@ -465,8 +465,9 @@ spec-kitty agent tasks move-task WP01 --to doing
         # Commit spec.md to planning branch
         _commit_to_branch(spec_file, feature_slug_formatted, "spec", repo_root, planning_branch, json_output)
 
-        # Create landing branch and initialize meta.json
-        landing_branch = feature_slug_formatted
+        # Create landing branch via ensure_landing_branch (single source of truth).
+        # First seed meta.json with upstream_branch so ensure_landing_branch picks
+        # it up and creates the branch + sets tracking in one call.
         upstream_branch = planning_branch  # e.g., "main"
 
         meta_file = feature_dir / "meta.json"
@@ -477,30 +478,29 @@ spec-kitty agent tasks move-task WP01 --to doing
             except (json.JSONDecodeError, OSError):
                 meta = {}
 
-        # Set landing branch fields in meta.json
-        meta["target_branch"] = landing_branch
+        # Seed branch routing so ensure_landing_branch resolves correctly
+        meta["target_branch"] = feature_slug_formatted
         meta["upstream_branch"] = upstream_branch
-
-        # Create the landing branch from the upstream branch
-        create_branch_result = subprocess.run(
-            ["git", "branch", landing_branch, upstream_branch],
-            cwd=repo_root,
-            capture_output=True,
-            text=True,
-            check=False,
+        meta_file.write_text(
+            json.dumps(meta, indent=2, ensure_ascii=False) + "\n",
+            encoding="utf-8",
         )
-        if create_branch_result.returncode == 0:
+
+        from specify_cli.core.feature_detection import ensure_landing_branch
+        try:
+            landing_branch = ensure_landing_branch(repo_root, feature_slug_formatted)
             if not json_output:
-                console.print(f"[green]✓[/green] Created landing branch: {landing_branch} from {upstream_branch}")
-        else:
-            # Branch might already exist
-            branch_exists = subprocess.run(
-                ["git", "rev-parse", "--verify", landing_branch],
-                cwd=repo_root, capture_output=True, check=False,
-            ).returncode == 0
-            if not branch_exists:
-                if not json_output:
-                    console.print(f"[yellow]Warning:[/yellow] Could not create landing branch: {create_branch_result.stderr}")
+                console.print(f"[green]✓[/green] Landing branch: {landing_branch} (tracking {upstream_branch})")
+        except RuntimeError as e:
+            if not json_output:
+                console.print(f"[yellow]Warning:[/yellow] {e}")
+            landing_branch = feature_slug_formatted
+
+        # Re-read meta.json (ensure_landing_branch may have updated it)
+        try:
+            meta = json.loads(meta_file.read_text(encoding="utf-8"))
+        except (json.JSONDecodeError, OSError):
+            pass
 
         # T013: Initialize documentation state if mission is documentation
         if mission == "documentation":

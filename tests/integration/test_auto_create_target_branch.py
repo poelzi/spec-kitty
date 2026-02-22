@@ -557,3 +557,193 @@ def test_main_as_target_creates_landing_branch(tmp_path):
     meta = json.loads((feature_dir / "meta.json").read_text())
     assert meta["target_branch"] == landing_branch
     assert meta.get("upstream_branch") == "main"
+
+
+# ============================================================================
+# Landing branch tracking tests
+# ============================================================================
+
+
+def _get_branch_upstream(repo: Path, branch: str) -> str | None:
+    """Return the upstream tracking branch for a local branch, or None."""
+    result = subprocess.run(
+        [
+            "git", "for-each-ref",
+            "--format=%(upstream:short)",
+            f"refs/heads/{branch}",
+        ],
+        cwd=repo,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if result.returncode == 0:
+        value = result.stdout.strip()
+        return value or None
+    return None
+
+
+def _init_kittify(repo: Path) -> None:
+    """Create minimal .kittify so locate_project_root() works."""
+    import yaml
+
+    kittify = repo / ".kittify"
+    kittify.mkdir(exist_ok=True)
+    (kittify / "config.yaml").write_text(
+        yaml.dump({"vcs": {"type": "git"}, "agents": {"available": ["claude"]}})
+    )
+    (kittify / "metadata.yaml").write_text(
+        yaml.dump({"spec_kitty": {"version": "0.15.0"}})
+    )
+
+
+def test_landing_branch_has_tracking_after_creation(tmp_path):
+    """Landing branch must track its upstream after create-feature."""
+    repo = tmp_path / "repo"
+    repo.mkdir()
+
+    subprocess.run(
+        ["git", "init", "-b", "main"], cwd=repo, check=True, capture_output=True
+    )
+    subprocess.run(
+        ["git", "config", "user.name", "Test"],
+        cwd=repo, check=True, capture_output=True,
+    )
+    subprocess.run(
+        ["git", "config", "user.email", "test@test.com"],
+        cwd=repo, check=True, capture_output=True,
+    )
+
+    (repo / "README.md").write_text("# Test\n")
+    _init_kittify(repo)
+    subprocess.run(["git", "add", "."], cwd=repo, check=True, capture_output=True)
+    subprocess.run(
+        ["git", "commit", "-m", "Initial"], cwd=repo, check=True, capture_output=True
+    )
+
+    result = run_cli(
+        repo, "agent", "feature", "create-feature", "track-test", "--json",
+    )
+    assert result.returncode == 0, f"create-feature failed: {result.stderr}\n{result.stdout}"
+
+    payload = json.loads(result.stdout)
+    landing = payload["landing_branch"]
+
+    tracking = _get_branch_upstream(repo, landing)
+    assert tracking == "main", (
+        f"Landing branch '{landing}' should track 'main', got: {tracking}"
+    )
+
+
+def test_landing_branch_has_tracking_with_custom_upstream(tmp_path):
+    """Landing branch must track the explicit upstream branch."""
+    repo = tmp_path / "repo"
+    repo.mkdir()
+
+    subprocess.run(
+        ["git", "init", "-b", "main"], cwd=repo, check=True, capture_output=True
+    )
+    subprocess.run(
+        ["git", "config", "user.name", "Test"],
+        cwd=repo, check=True, capture_output=True,
+    )
+    subprocess.run(
+        ["git", "config", "user.email", "test@test.com"],
+        cwd=repo, check=True, capture_output=True,
+    )
+
+    (repo / "README.md").write_text("# Test\n")
+    _init_kittify(repo)
+    subprocess.run(["git", "add", "."], cwd=repo, check=True, capture_output=True)
+    subprocess.run(
+        ["git", "commit", "-m", "Initial"], cwd=repo, check=True, capture_output=True
+    )
+
+    # Create a custom upstream branch
+    subprocess.run(
+        ["git", "branch", "release-2.x"], cwd=repo, check=True, capture_output=True,
+    )
+
+    result = run_cli(
+        repo,
+        "agent", "feature", "create-feature", "custom-upstream",
+        "--upstream-branch", "release-2.x",
+        "--json",
+    )
+    assert result.returncode == 0, f"create-feature failed: {result.stderr}\n{result.stdout}"
+
+    payload = json.loads(result.stdout)
+    landing = payload["landing_branch"]
+
+    tracking = _get_branch_upstream(repo, landing)
+    assert tracking == "release-2.x", (
+        f"Landing branch '{landing}' should track 'release-2.x', got: {tracking}"
+    )
+
+
+def test_landing_branch_tracking_repaired_by_ensure(tmp_path):
+    """ensure_landing_branch must repair missing tracking on existing branches."""
+    repo = tmp_path / "repo"
+    repo.mkdir()
+
+    subprocess.run(
+        ["git", "init", "-b", "main"], cwd=repo, check=True, capture_output=True
+    )
+    subprocess.run(
+        ["git", "config", "user.name", "Test"],
+        cwd=repo, check=True, capture_output=True,
+    )
+    subprocess.run(
+        ["git", "config", "user.email", "test@test.com"],
+        cwd=repo, check=True, capture_output=True,
+    )
+
+    (repo / "README.md").write_text("# Test\n")
+    subprocess.run(["git", "add", "."], cwd=repo, check=True, capture_output=True)
+    subprocess.run(
+        ["git", "commit", "-m", "Initial"], cwd=repo, check=True, capture_output=True
+    )
+
+    # Manually create a landing branch WITHOUT tracking (simulates pre-fix state)
+    feature_slug = "007-no-tracking"
+    subprocess.run(
+        ["git", "branch", feature_slug, "main"],
+        cwd=repo, check=True, capture_output=True,
+    )
+
+    # Verify it has NO tracking
+    assert _get_branch_upstream(repo, feature_slug) is None, (
+        "Pre-condition: branch should have no tracking"
+    )
+
+    # Create feature metadata pointing to this branch
+    _init_kittify(repo)
+
+    feature_dir = repo / "kitty-specs" / feature_slug
+    tasks_dir = feature_dir / "tasks"
+    tasks_dir.mkdir(parents=True)
+    (feature_dir / "meta.json").write_text(
+        json.dumps({
+            "feature_number": "007",
+            "slug": feature_slug,
+            "target_branch": feature_slug,
+            "upstream_branch": "main",
+        }, indent=2) + "\n"
+    )
+    (tasks_dir / "WP01-test.md").write_text(
+        "---\nwork_package_id: WP01\nlane: planned\ndependencies: []\n---\n\n# WP01\n"
+    )
+    subprocess.run(["git", "add", "."], cwd=repo, check=True, capture_output=True)
+    subprocess.run(
+        ["git", "commit", "-m", "Add feature"], cwd=repo, check=True, capture_output=True,
+    )
+
+    # Run implement — this calls ensure_landing_branch internally
+    result = run_cli(repo, "implement", "WP01")
+    assert result.returncode == 0, f"implement failed: {result.stderr}\n{result.stdout}"
+
+    # After ensure_landing_branch, tracking should be repaired
+    tracking = _get_branch_upstream(repo, feature_slug)
+    assert tracking == "main", (
+        f"Landing branch '{feature_slug}' should have tracking repaired to 'main', got: {tracking}"
+    )

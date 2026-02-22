@@ -681,6 +681,64 @@ def get_feature_upstream_branch(repo_root: Path, feature_slug: str) -> str:
         return "main"
 
 
+def _get_branch_upstream(repo_root: Path, branch_name: str) -> str | None:
+    """Get the local upstream tracking branch for a given local branch.
+
+    Uses ``git for-each-ref`` which works without checking out the branch.
+
+    Args:
+        repo_root: Repository root path
+        branch_name: Local branch name
+
+    Returns:
+        Upstream short name (e.g. ``"main"``) or ``None`` if unset.
+    """
+    import subprocess
+
+    result = subprocess.run(
+        [
+            "git", "for-each-ref",
+            "--format=%(upstream:short)",
+            f"refs/heads/{branch_name}",
+        ],
+        cwd=repo_root,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        check=False,
+    )
+    if result.returncode == 0:
+        value = result.stdout.strip()
+        return value or None
+    return None
+
+
+def _set_branch_upstream(repo_root: Path, branch_name: str, upstream: str) -> bool:
+    """Set local upstream tracking for *branch_name* to *upstream*.
+
+    Args:
+        repo_root: Repository root path
+        branch_name: Local branch whose tracking to set
+        upstream: Target branch (local name, e.g. ``"main"``)
+
+    Returns:
+        ``True`` on success, ``False`` on failure (non-fatal).
+    """
+    import subprocess
+
+    result = subprocess.run(
+        ["git", "branch", "--set-upstream-to", upstream, branch_name],
+        cwd=repo_root,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        check=False,
+    )
+    return result.returncode == 0
+
+
 def ensure_landing_branch(repo_root: Path, feature_slug: str) -> str:
     """Ensure a landing branch exists for a feature, creating it if needed.
 
@@ -693,6 +751,10 @@ def ensure_landing_branch(repo_root: Path, feature_slug: str) -> str:
     1. Create the landing branch from the current upstream branch
     2. Update meta.json to set target_branch to the landing branch name
        and upstream_branch to the previous target_branch value
+
+    This function **always** verifies that the landing branch has correct
+    upstream tracking set (``git branch --set-upstream-to``).  If tracking is
+    missing or points to the wrong branch it will be repaired.
 
     Args:
         repo_root: Repository root path (may be worktree)
@@ -730,10 +792,6 @@ def ensure_landing_branch(repo_root: Path, feature_slug: str) -> str:
 
     current_target = meta.get("target_branch", "main")
     current_upstream = meta.get("upstream_branch")
-
-    # Already configured: target_branch is the landing branch
-    if current_target == landing_branch and branch_exists:
-        return landing_branch
 
     # Determine the upstream branch (what the landing branch is based on)
     if current_upstream:
@@ -791,6 +849,23 @@ def ensure_landing_branch(repo_root: Path, feature_slug: str) -> str:
                     f"Could not create landing branch '{landing_branch}': "
                     f"{create_result.stderr or create_result.stdout}"
                 )
+
+    # -----------------------------------------------------------------
+    # Always verify / repair upstream tracking on the landing branch.
+    # This covers both freshly-created branches and pre-existing ones
+    # that were created without tracking (e.g. bare `git branch`).
+    # -----------------------------------------------------------------
+    current_tracking = _get_branch_upstream(main_repo_root, landing_branch)
+    if current_tracking != upstream:
+        # Only attempt to set tracking if the upstream ref actually exists
+        upstream_ref_exists = subprocess.run(
+            ["git", "rev-parse", "--verify", upstream],
+            cwd=main_repo_root,
+            capture_output=True,
+            check=False,
+        ).returncode == 0
+        if upstream_ref_exists:
+            _set_branch_upstream(main_repo_root, landing_branch, upstream)
 
     # Update meta.json if needed
     needs_update = (
@@ -879,6 +954,9 @@ __all__ = [
     # Landing branch helpers
     "get_feature_upstream_branch",
     "ensure_landing_branch",
+    # Landing branch tracking helpers
+    "_get_branch_upstream",
+    "_set_branch_upstream",
     # Change stack helpers
     "is_primary_branch",
     "try_detect_feature_slug",
