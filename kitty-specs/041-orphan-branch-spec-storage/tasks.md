@@ -31,12 +31,12 @@
 **Estimated Prompt Size**: ~380 lines
 
 ### Included Subtasks
-- [ ] T001 Define `spec_storage` config schema with defaults (`branch_name`, `worktree_path`, `auto_push=false`)
-- [ ] T002 Implement config read/write accessors for spec storage settings
-- [ ] T003 [P] Add strict validation for branch names, paths, and boolean coercion failures
-- [ ] T004 [P] Add orphan-branch inspection helpers in git core utilities
-- [ ] T005 Add git worktree discovery helper that resolves configured spec branch path
-- [ ] T006 [P] Add unit tests for config + git/worktree helper behaviors
+- [x] T001 Define `spec_storage` config schema with defaults (`branch_name`, `worktree_path`, `auto_push=false`)
+- [x] T002 Implement config read/write accessors for spec storage settings
+- [x] T003 [P] Add strict validation for branch names, paths, and boolean coercion failures
+- [x] T004 [P] Add orphan-branch inspection helpers in git core utilities
+- [x] T005 Add git worktree discovery helper that resolves configured spec branch path
+- [x] T006 [P] Add unit tests for config + git/worktree helper behaviors
 
 ### Implementation Notes
 - Keep config source-of-truth in `.kittify/config.yaml`.
