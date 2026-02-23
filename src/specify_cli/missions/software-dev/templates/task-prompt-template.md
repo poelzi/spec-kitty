@@ -133,6 +133,12 @@ To change a work package's lane, either:
 
 The CLI command updates both frontmatter and activity log automatically.
 
+**Lane ownership contract**:
+
+- Implementers move work to `for_review` when coding is complete.
+- Reviewers move work from `for_review` to `done` after approval, or back to `planned` with feedback.
+- Implementers should not set `done` during implementation.
+
 **Valid lanes**: `planned`, `doing`, `for_review`, `done`
 
 ### Optional Phase Subdirectories

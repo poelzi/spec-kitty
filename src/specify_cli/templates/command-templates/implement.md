@@ -60,6 +60,26 @@ spec-kitty implement WP## --base WPXX  # With dependencies (branches from base W
 - In `tasks/WP##-*.md` with `lane: "doing"` = IN PROGRESS (not done)
 - Need to move to `for_review` lane when complete
 
+## Lane Contract (Implementers)
+
+Implementers must stop at `for_review`.
+
+- Implementer flow: `planned -> doing -> for_review`
+- Reviewer flow: `for_review -> done` (or back to `planned` with feedback)
+- Do not move a WP directly to `done` from implementation flow
+
+If you accidentally moved to `done`, immediately correct it:
+
+```bash
+spec-kitty agent tasks move-task WP## --to for_review --note "Accidental done transition corrected; pending review"
+```
+
+Do not run this from implementation flow:
+
+```bash
+spec-kitty agent tasks move-task WP## --to done
+```
+
 ## When to Use
 
 After `/spec-kitty.tasks` generates work packages in the main repository:

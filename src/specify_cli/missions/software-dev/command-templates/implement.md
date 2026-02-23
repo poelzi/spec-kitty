@@ -41,6 +41,30 @@ If no WP ID is provided, it will automatically find the first work package with 
 
 ---
 
+## Lane Contract (Implementers)
+
+**Implementation is complete when the WP is moved to `for_review`, not `done`.**
+
+- Implementer flow: `planned -> doing -> for_review`
+- Reviewer flow: `for_review -> done` (or back to `planned` with feedback)
+- Do **not** move a WP to `done` from `/spec-kitty.implement`
+
+If you accidentally moved to `done`, immediately fix it:
+
+```bash
+spec-kitty agent tasks move-task WP## --to for_review --note "Accidental done transition corrected; pending review"
+```
+
+<details><summary>PowerShell equivalent</summary>
+
+```powershell
+spec-kitty agent tasks move-task WP## --to for_review --note "Accidental done transition corrected; pending review"
+```
+
+</details>
+
+---
+
 ## Commit Workflow
 
 **BEFORE moving to for_review**, you MUST commit your implementation:
@@ -65,6 +89,20 @@ git commit -m "feat(WP##): <describe your implementation>"
 ```bash
 spec-kitty agent tasks move-task WP## --to for_review --note "Ready for review: <summary>"
 ```
+
+**Do not run:**
+
+```bash
+spec-kitty agent tasks move-task WP## --to done
+```
+
+<details><summary>PowerShell equivalent</summary>
+
+```powershell
+spec-kitty agent tasks move-task WP## --to done
+```
+
+</details>
 
 **Why this matters:**
 - `move-task` validates that your worktree has commits beyond main
