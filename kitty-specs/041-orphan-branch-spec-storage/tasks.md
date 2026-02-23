@@ -66,7 +66,7 @@ Dependencies: None
 **Estimated Prompt Size**: ~360 lines
 
 ### Included Subtasks
-- [ ] T007 Update init bootstrap to create or verify configured orphan branch
+- [x] T007 Update init bootstrap to create or verify configured orphan branch
 - [ ] T008 Create or attach configured spec worktree path with idempotent rerun behavior
 - [ ] T009 [P] Persist default `auto_push=false` when writing config during init
 - [ ] T010 [P] Support custom branch/worktree-path initialization from config
