@@ -166,11 +166,11 @@ Dependencies: WP01, WP02
 **Estimated Prompt Size**: ~370 lines
 
 ### Included Subtasks
-- [ ] T023 Extend `spec-kitty check` to validate configured branch/worktree topology and status categories
-- [ ] T024 Implement automatic repair for missing registration/path and fresh-clone bootstrap
-- [ ] T025 [P] Add safe conflict handling when configured worktree path is a regular directory
-- [ ] T026 Add preflight health enforcement before spec-modifying command execution
-- [ ] T027 [P] Add integration tests for healthy, missing-path, missing-registration, wrong-branch, and path-conflict cases
+- [x] T023 Extend `spec-kitty check` to validate configured branch/worktree topology and status categories
+- [x] T024 Implement automatic repair for missing registration/path and fresh-clone bootstrap
+- [x] T025 [P] Add safe conflict handling when configured worktree path is a regular directory
+- [x] T026 Add preflight health enforcement before spec-modifying command execution
+- [x] T027 [P] Add integration tests for healthy, missing-path, missing-registration, wrong-branch, and path-conflict cases
 
 ### Implementation Notes
 - Use git-native inspection (`git worktree list`) as source of truth.
