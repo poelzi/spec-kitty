@@ -1,4 +1,6 @@
 {
   "target_branch": "041-orphan-branch-spec-storage",
-  "upstream_branch": "main-new"
+  "upstream_branch": "main-new",
+  "vcs": "git",
+  "vcs_locked_at": "2026-02-23T15:23:23.633234+00:00"
 }
