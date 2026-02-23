@@ -198,10 +198,10 @@ Dependencies: WP01, WP02, WP04
 **Estimated Prompt Size**: ~320 lines
 
 ### Included Subtasks
-- [ ] T028 Update review/merge flow to exclude `kitty-specs/` paths when integrating to `main`
-- [ ] T029 [P] Add regression tests for stale landing branch merge behavior
-- [ ] T030 Update context/inspection output to include spec worktree absolute path and branch name
-- [ ] T031 [P] Add tests for context output and branch/path mismatch reporting
+- [x] T028 Update review/merge flow to exclude `kitty-specs/` paths when integrating to `main`
+- [x] T029 [P] Add regression tests for stale landing branch merge behavior
+- [x] T030 Update context/inspection output to include spec worktree absolute path and branch name
+- [x] T031 [P] Add tests for context output and branch/path mismatch reporting
 
 ### Implementation Notes
 - Preserve existing review workflow semantics outside `kitty-specs/` path filtering.
