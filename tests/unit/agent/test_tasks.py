@@ -1127,3 +1127,84 @@ class TestFindFeatureSlug:
 
         with pytest.raises(Exit):
             _find_feature_slug()
+
+
+class TestListDependents:
+    """Tests for list-dependents command."""
+
+    @patch("specify_cli.cli.commands.agent.tasks._ensure_target_branch_checked_out")
+    @patch("specify_cli.cli.commands.agent.tasks.locate_project_root")
+    @patch("specify_cli.cli.commands.agent.tasks._find_feature_slug")
+    def test_list_dependents_reports_yaml_dependency_list(
+        self, mock_slug: Mock, mock_root: Mock, mock_ensure: Mock, tmp_path: Path
+    ):
+        """Should parse dependencies as YAML list values, not raw scalar text."""
+        repo_root = tmp_path
+        (repo_root / ".kittify").mkdir()
+        tasks_dir = repo_root / "kitty-specs" / "008-test" / "tasks"
+        tasks_dir.mkdir(parents=True)
+
+        (tasks_dir / "WP01-base.md").write_text(
+            """---
+work_package_id: "WP01"
+title: "Base"
+lane: "done"
+---
+
+Content
+""",
+            encoding="utf-8",
+        )
+
+        (tasks_dir / "WP04-extra.md").write_text(
+            """---
+work_package_id: "WP04"
+title: "Extra"
+lane: "done"
+---
+
+Content
+""",
+            encoding="utf-8",
+        )
+
+        (tasks_dir / "WP02-target.md").write_text(
+            """---
+work_package_id: "WP02"
+title: "Target"
+lane: "for_review"
+dependencies:
+- WP01
+- WP04
+---
+
+Content
+""",
+            encoding="utf-8",
+        )
+
+        (tasks_dir / "WP03-dependent.md").write_text(
+            """---
+work_package_id: "WP03"
+title: "Dependent"
+lane: "planned"
+dependencies:
+- WP02
+---
+
+Content
+""",
+            encoding="utf-8",
+        )
+
+        mock_root.return_value = repo_root
+        mock_slug.return_value = "008-test"
+        mock_ensure.return_value = (repo_root, "main")
+
+        result = runner.invoke(app, ["list-dependents", "WP02", "--json"])
+
+        assert result.exit_code == 0
+        output = json.loads(result.stdout)
+        assert output["wp_id"] == "WP02"
+        assert output["depends_on"] == ["WP01", "WP04"]
+        assert output["dependents"] == ["WP03"]

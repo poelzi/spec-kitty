@@ -13,7 +13,11 @@ import typer
 from rich.console import Console
 from typing_extensions import Annotated
 
-from specify_cli.core.dependency_graph import build_dependency_graph, get_dependents
+from specify_cli.core.dependency_graph import (
+    build_dependency_graph,
+    get_dependents,
+    parse_wp_dependencies,
+)
 from specify_cli.core.feature_detection import (
     FeatureDetectionError,
     detect_feature_slug,
@@ -1989,14 +1993,7 @@ def list_dependents(
         # Also get this WP's own dependencies for context
         try:
             wp = locate_work_package(repo_root, feature_slug, wp_id)
-            own_deps_raw = extract_scalar(wp.frontmatter, "dependencies")
-            # Handle both list and string formats
-            if isinstance(own_deps_raw, list):
-                own_deps = own_deps_raw
-            elif own_deps_raw:
-                own_deps = [own_deps_raw]
-            else:
-                own_deps = []
+            own_deps = parse_wp_dependencies(wp.path)
         except Exception:
             own_deps = []
 

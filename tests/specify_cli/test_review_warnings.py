@@ -5,6 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 
 import pytest
+import typer
 
 from specify_cli.core.dependency_graph import build_dependency_graph, get_dependents
 from specify_cli.frontmatter import write_frontmatter
@@ -215,3 +216,32 @@ def test_workflow_review_warns_dependents(monkeypatch: pytest.MonkeyPatch, tmp_p
 
     assert "Dependency Alert" in output
     assert "WP02" in output
+
+
+def test_workflow_review_rejects_done_lane(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """Review workflow should not reopen a completed work package."""
+    repo_root = tmp_path
+    (repo_root / ".kittify").mkdir()
+    feature_slug = "011-test"
+    tasks_dir = repo_root / "kitty-specs" / feature_slug / "tasks"
+    tasks_dir.mkdir(parents=True)
+
+    create_wp_file(tasks_dir / "WP01-done.md", "WP01", [], lane="done")
+
+    monkeypatch.setenv("SPECIFY_REPO_ROOT", str(repo_root))
+    monkeypatch.chdir(repo_root)
+    monkeypatch.setattr(
+        "specify_cli.cli.commands.agent.workflow._ensure_target_branch_checked_out",
+        lambda repo_root, feature_slug: (repo_root, "main"),
+    )
+
+    with pytest.raises(typer.Exit):
+        workflow.review(wp_id="WP01", feature=feature_slug, agent="test-reviewer")
+
+    output = capsys.readouterr().out
+    assert "already in lane 'done'" in output
+    assert "move-task WP01 --to for_review" in output

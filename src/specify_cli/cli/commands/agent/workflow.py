@@ -1287,6 +1287,22 @@ def review(
 
         # Move to "doing" lane if not already there
         current_lane = extract_scalar(wp.frontmatter, "lane") or "for_review"
+        if current_lane not in {"for_review", "doing"}:
+            if current_lane == "done":
+                print(
+                    f"Error: {normalized_wp_id} is already in lane 'done'. Review workflow only accepts work packages in 'for_review'."
+                )
+            else:
+                print(
+                    f"Error: {normalized_wp_id} is in lane '{current_lane}'. Review workflow requires lane 'for_review'."
+                )
+            print()
+            print("If you need to review it again, move it explicitly first:")
+            print(
+                f"  spec-kitty agent tasks move-task {normalized_wp_id} --to for_review"
+            )
+            raise typer.Exit(1)
+
         if current_lane != "doing":
             # Require --agent parameter to track who is reviewing
             if not agent:
