@@ -99,12 +99,12 @@ Dependencies: WP01
 **Estimated Prompt Size**: ~430 lines
 
 ### Included Subtasks
-- [ ] T012 Add centralized planning-artifact root resolver backed by configured spec worktree path
-- [ ] T013 [P] Update specify and plan write paths to use resolved spec worktree root
-- [ ] T014 [P] Update clarify and workflow lane-update paths to read/write from spec worktree
-- [ ] T015 Implement pre-commit detection prompt for manual edits (include/skip/abort)
-- [ ] T016 Implement configurable auto-push behavior (`auto_push=false` default)
-- [ ] T017 [P] Add integration tests for routing, manual-edit prompt outcomes, and auto-push toggle
+- [x] T012 Add centralized planning-artifact root resolver backed by configured spec worktree path
+- [x] T013 [P] Update specify and plan write paths to use resolved spec worktree root
+- [x] T014 [P] Update clarify and workflow lane-update paths to read/write from spec worktree
+- [x] T015 Implement pre-commit detection prompt for manual edits (include/skip/abort)
+- [x] T016 Implement configurable auto-push behavior (`auto_push=false` default)
+- [x] T017 [P] Add integration tests for routing, manual-edit prompt outcomes, and auto-push toggle
 
 ### Implementation Notes
 - Keep commit behavior local-only unless config explicitly enables push.
