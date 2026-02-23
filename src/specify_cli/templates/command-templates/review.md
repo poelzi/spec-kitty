@@ -46,7 +46,7 @@ This is intentional - worktrees provide isolation for parallel feature developme
    - Consult supporting documents as referenced: constitution, plan, spec, data-model, contracts, research, quickstart, code changes.
    - Review the associated code in the repository (diffs, tests, docs) to validate the implementation.
    - **Workspace-per-WP checks** (v0.11.0+):
-     * dependency_check: If this WP has `dependencies: [WP##, ...]` in frontmatter, verify each dependency WP is merged to main before review; confirm your branch includes those commits.
+      * dependency_check: If this WP has `dependencies: [WP##, ...]` in frontmatter, verify each dependency WP is merged to the landing branch before review; confirm your branch includes those commits.
      * dependent_check: Identify any WPs that list this WP as a dependency (scan `tasks/*.md`); list them with their current lane.
      * rebase_warning: If you request changes AND any dependents exist, warn those agents that a rebase is required and provide a concrete rebase command.
      * verify_instruction: Cross-check dependency declarations against actual code coupling (imports, shared modules, API contracts) and flag mismatches.

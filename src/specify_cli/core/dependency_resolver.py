@@ -1,7 +1,7 @@
 """Dependency resolution and merge strategy recommendation.
 
 This module provides logic to detect when multi-parent dependencies should be
-merged to main before implementing a dependent WP, avoiding auto-merge conflicts.
+merged to the landing branch before implementing a dependent WP, avoiding auto-merge conflicts.
 """
 
 from __future__ import annotations
