@@ -65,9 +65,9 @@ def select_with_arrows(
 
         for i, key in enumerate(option_keys):
             if i == selected_index:
-                table.add_row("▶", f"[cyan]{key}[/cyan] [dim]({options[key]})[/dim]")
+                table.add_row("▶", f"(x) [cyan]{key}[/cyan] - {options[key]}")
             else:
-                table.add_row(" ", f"[cyan]{key}[/cyan] [dim]({options[key]})[/dim]")
+                table.add_row(" ", f"( ) [cyan]{key}[/cyan] - {options[key]}")
 
         table.add_row("", "")
         table.add_row("", "[dim]Use ↑/↓ to navigate, Enter to select, Esc to cancel[/dim]")
@@ -139,9 +139,9 @@ def multi_select_with_arrows(
         table.add_column(style="white", justify="left")
 
         for i, key in enumerate(option_keys):
-            indicator = "[cyan]☑" if i in selected_indices else "[bright_black]☐"
+            indicator = "[cyan]\\[x][/cyan]" if i in selected_indices else "[ ]"
             pointer = "▶" if i == cursor_index else " "
-            table.add_row(pointer, f"{indicator} [cyan]{key}[/cyan] [dim]({options[key]})[/dim]")
+            table.add_row(pointer, f"{indicator} [cyan]{key}[/cyan] - {options[key]}")
 
         table.add_row("", "")
         table.add_row(
