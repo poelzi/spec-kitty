@@ -229,9 +229,9 @@ Dependencies: WP03, WP05
 **Estimated Prompt Size**: ~260 lines
 
 ### Included Subtasks
-- [ ] T032 [P] Update docs/help/upgrade notes for orphan branch model and config fields
-- [ ] T033 [P] Validate quickstart scenarios against final command behavior and correct drift
-- [ ] T034 Run regression commands (`pytest` targeted suites + `nix build`) and resolve failures
+- [x] T032 [P] Update docs/help/upgrade notes for orphan branch model and config fields
+- [x] T033 [P] Validate quickstart scenarios against final command behavior and correct drift
+- [x] T034 Run regression commands (`pytest` targeted suites + `nix build`) and resolve failures
 
 ### Implementation Notes
 - Ensure docs explicitly call out explicit migration trigger and auto-push default off.
