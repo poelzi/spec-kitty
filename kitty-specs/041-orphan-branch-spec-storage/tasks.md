@@ -69,7 +69,7 @@ Dependencies: None
 - [x] T007 Update init bootstrap to create or verify configured orphan branch
 - [x] T008 Create or attach configured spec worktree path with idempotent rerun behavior
 - [x] T009 [P] Persist default `auto_push=false` when writing config during init
-- [ ] T010 [P] Support custom branch/worktree-path initialization from config
+- [x] T010 [P] Support custom branch/worktree-path initialization from config
 - [ ] T011 Add integration tests for fresh init, rerun, and custom-config bootstrap paths
 
 ### Implementation Notes
