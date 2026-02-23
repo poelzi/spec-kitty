@@ -134,11 +134,11 @@ Dependencies: WP01, WP02
 **Estimated Prompt Size**: ~390 lines
 
 ### Included Subtasks
-- [ ] T018 Add migration module `src/specify_cli/upgrade/migrations/m_0_16_0_spec_branch_worktree.py` and register in migration pipeline
-- [ ] T019 [P] Implement legacy-layout detection and idempotent `already_migrated` branch
-- [ ] T020 Implement artifact transfer to orphan branch and cleanup commit removing `kitty-specs/` from planning branch
-- [ ] T021 [P] Enforce migration safety checks (no history rewriting, no force operations)
-- [ ] T022 Add integration tests for success, idempotence, and history-preservation behavior
+- [x] T018 Add migration module `src/specify_cli/upgrade/migrations/m_0_16_0_spec_branch_worktree.py` and register in migration pipeline
+- [x] T019 [P] Implement legacy-layout detection and idempotent `already_migrated` branch
+- [x] T020 Implement artifact transfer to orphan branch and cleanup commit removing `kitty-specs/` from planning branch
+- [x] T021 [P] Enforce migration safety checks (no history rewriting, no force operations)
+- [x] T022 Add integration tests for success, idempotence, and history-preservation behavior
 
 ### Implementation Notes
 - Migration is explicit-only and must not auto-trigger during normal commands.
