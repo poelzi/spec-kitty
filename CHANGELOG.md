@@ -7,6 +7,17 @@ All notable changes to the Spec Kitty CLI and templates are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.15.4] - 2026-02-24
+
+### ✅ Added
+
+- **implement-all command**: New `/spec-kitty.implement-all` slash command that orchestrates all planned WPs via parallel subagents in dependency-respecting waves. Includes `spec-kitty agent workflow schedule` CLI command for computing wave-based execution plans.
+- **Number-only `--feature` resolution**: `--feature 014` (or `--feature 14`) now resolves to the unique matching feature slug (e.g., `014-my-feature`) instead of failing with "Invalid feature slug format". Works with explicit flag and `SPECIFY_FEATURE` env var.
+
+### 🐛 Fixed
+
+- **Migration rendering**: The implement-all migration now uses the full `render_command_template()` pipeline, producing correct TOML format for Gemini/Qwen agents and proper filename conventions for Codex, instead of copying raw markdown to all agents.
+
 ## [0.15.3] - 2026-02-14
 
 ### 🐛 Fixed
