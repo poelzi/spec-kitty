@@ -162,6 +162,47 @@ def _list_all_features(repo_root: Path) -> list[str]:
     return sorted(features)
 
 
+def _resolve_partial_slug(partial: str, repo_root: Path) -> Optional[str]:
+    """Resolve a partial feature identifier (e.g. number-only) to a full slug.
+
+    Supports number-only input like "14" or "014" which gets zero-padded
+    to 3 digits and matched against existing features.
+
+    Args:
+        partial: Partial feature identifier (e.g., "14", "014")
+        repo_root: Repository root path
+
+    Returns:
+        Full feature slug if exactly one match found, None otherwise
+
+    Raises:
+        MultipleFeaturesError: If multiple features match the partial identifier
+    """
+    # Only handle pure numeric input (1-3 digits)
+    if not re.match(r'^\d{1,3}$', partial):
+        return None
+
+    padded = partial.zfill(3)
+    prefix = f"{padded}-"
+
+    all_features = _list_all_features(repo_root)
+    matches = [f for f in all_features if f.startswith(prefix)]
+
+    if len(matches) == 1:
+        return matches[0]
+    elif len(matches) > 1:
+        error_msg = (
+            f"Ambiguous feature number: {partial}\n"
+            f"Multiple features match:\n"
+            + "\n".join(f"  - {f}" for f in matches)
+            + "\n\nPlease specify the full feature slug using:\n"
+            + "  --feature <feature-slug>  (e.g., --feature 020-my-feature)"
+        )
+        raise MultipleFeaturesError(matches, error_msg)
+
+    return None
+
+
 def _detect_from_git_branch(repo_root: Path) -> Optional[str]:
     """Detect feature from git branch name.
 
@@ -509,15 +550,19 @@ def detect_feature(
             raise NoFeatureFoundError(error_msg)
         return None
 
-    # Validate slug format FIRST (before checking if directory exists)
+    # Attempt to resolve partial slugs (e.g., number-only like "014" or "14")
     if not re.match(r'^\d{3}-.+$', detected_slug):
-        error_msg = (
-            f"Invalid feature slug format: {detected_slug}\n"
-            f"Expected format: ###-feature-name (e.g., 020-my-feature)"
-        )
-        if mode == "strict":
-            raise FeatureDetectionError(error_msg)
-        return None
+        resolved = _resolve_partial_slug(detected_slug, repo_root)
+        if resolved:
+            detected_slug = resolved
+        else:
+            error_msg = (
+                f"Invalid feature slug format: {detected_slug}\n"
+                f"Expected format: ###-feature-name (e.g., 020-my-feature)"
+            )
+            if mode == "strict":
+                raise FeatureDetectionError(error_msg)
+            return None
 
     # Validate feature exists
     if not _validate_feature_exists(detected_slug, repo_root):

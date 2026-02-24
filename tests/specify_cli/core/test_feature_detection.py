@@ -305,6 +305,66 @@ def test_feature_not_found_explicit(repo_with_features: Path):
     assert "999-nonexistent" in error
 
 
+# ============================================================================
+# Number-Only Feature Resolution Tests
+# ============================================================================
+
+
+def test_number_only_resolves_unique_feature(repo_with_features: Path):
+    """Test that passing just a number resolves to the unique matching feature."""
+    ctx = detect_feature(repo_with_features, explicit_feature="020")
+    assert ctx.slug == "020-feature-a"
+    assert ctx.detection_method == "explicit"
+
+
+def test_number_only_resolves_with_zero_padding(repo_with_features: Path):
+    """Test that unpadded numbers get zero-padded and resolve correctly."""
+    ctx = detect_feature(repo_with_features, explicit_feature="20")
+    assert ctx.slug == "020-feature-a"
+    assert ctx.detection_method == "explicit"
+
+
+def test_number_only_single_digit(tmp_path: Path):
+    """Test that a single-digit number resolves correctly."""
+    repo_root = tmp_path / "repo"
+    repo_root.mkdir()
+    kitty_specs = repo_root / "kitty-specs"
+    kitty_specs.mkdir()
+    (kitty_specs / "001-first-feature").mkdir()
+
+    ctx = detect_feature(repo_root, explicit_feature="1")
+    assert ctx.slug == "001-first-feature"
+
+
+def test_number_only_no_match(repo_with_features: Path):
+    """Test that a number with no matching feature still errors."""
+    with pytest.raises(FeatureDetectionError) as exc_info:
+        detect_feature(repo_with_features, explicit_feature="099")
+
+    error = str(exc_info.value)
+    assert "Invalid feature slug format" in error
+
+
+def test_number_only_lenient_mode(repo_with_features: Path):
+    """Test number-only resolution works in lenient mode too."""
+    ctx = detect_feature(repo_with_features, explicit_feature="020", mode="lenient")
+    assert ctx is not None
+    assert ctx.slug == "020-feature-a"
+
+
+def test_number_only_env_var(repo_with_features: Path):
+    """Test that SPECIFY_FEATURE env var with number-only also resolves."""
+    env = {"SPECIFY_FEATURE": "021"}
+
+    with patch("subprocess.run") as mock_run:
+        mock_run.side_effect = subprocess.CalledProcessError(1, "git")
+
+        ctx = detect_feature(repo_with_features, cwd=repo_with_features, env=env)
+
+    assert ctx.slug == "021-feature-b"
+    assert ctx.detection_method == "env_var"
+
+
 def test_feature_context_dataclass_fields(repo_with_features: Path):
     """Test FeatureContext dataclass has all expected fields."""
     ctx = detect_feature(repo_with_features, explicit_feature="020-feature-a")

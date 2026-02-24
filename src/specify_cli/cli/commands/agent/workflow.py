@@ -1751,3 +1751,207 @@ def review(
     except Exception as e:
         print(f"Error: {e}")
         raise typer.Exit(1)
+
+
+# =============================================================================
+# Schedule command (implement-all support)
+# =============================================================================
+
+
+def _compute_waves(
+    planned_graph: dict[str, list[str]],
+    satisfied_wps: set[str],
+) -> list[list[str]]:
+    """Compute execution waves by simulating ready-WP detection.
+
+    Reuses the same dependency-satisfaction logic as the orchestrator's
+    ``get_ready_wps``, but pre-computes all waves upfront without
+    requiring an ``OrchestrationRun`` state object.
+
+    A WP is ready for wave N if all its dependencies are either:
+    - Assigned to a wave < N (planned, will be executed first), or
+    - Already satisfied (done/for_review/doing — not in planned_graph).
+
+    Args:
+        planned_graph: Adjacency list of planned-only WPs (WP -> deps).
+        satisfied_wps: WP IDs already in done/for_review/doing lanes.
+
+    Returns:
+        List of waves, each a sorted list of WP IDs.
+    """
+    waves: list[list[str]] = []
+    assigned: set[str] = set()
+    remaining = set(planned_graph.keys())
+
+    while remaining:
+        wave: list[str] = []
+        for wp_id in sorted(remaining):
+            deps = planned_graph[wp_id]
+            if all(
+                dep in assigned or dep in satisfied_wps or dep not in planned_graph
+                for dep in deps
+            ):
+                wave.append(wp_id)
+
+        if not wave:
+            break  # Shouldn't happen after cycle detection
+
+        waves.append(wave)
+        assigned.update(wave)
+        remaining -= set(wave)
+
+    return waves
+
+
+def _compute_base_for_wp(
+    deps: list[str],
+    planned_graph: dict[str, list[str]],
+) -> str | None:
+    """Compute --base for a WP.
+
+    - 0 planned deps → None (branch from landing/target branch)
+    - 1 planned dep  → that WP ID
+    - 2+ planned deps → None (requires auto-merge)
+    """
+    planned_deps = [d for d in deps if d in planned_graph]
+    if len(planned_deps) == 1:
+        return planned_deps[0]
+    return None
+
+
+@app.command()
+def schedule(
+    feature: Annotated[
+        Optional[str],
+        typer.Option(
+            "--feature",
+            "-f",
+            help="Explicit feature slug (auto-detected if omitted)",
+        ),
+    ] = None,
+    json_output: Annotated[
+        bool,
+        typer.Option(
+            "--json",
+            help="Output as JSON instead of human-readable text",
+        ),
+    ] = False,
+) -> None:
+    """Compute wave-based execution schedule for planned work packages.
+
+    Reads the dependency graph and WP lanes, filters to planned WPs,
+    and outputs a schedule of execution waves.  Used by
+    /spec-kitty.implement-all to orchestrate parallel subagents.
+    """
+    from specify_cli.core.dependency_graph import detect_cycles
+    from specify_cli.frontmatter import read_frontmatter
+
+    try:
+        feature_slug = _find_feature_slug(explicit_feature=feature)
+        cwd = Path.cwd().resolve()
+        repo_root = locate_project_root(cwd)
+        if repo_root is None:
+            print("Error: Not in a spec-kitty project.")
+            raise typer.Exit(1)
+
+        feature_dir = repo_root / "kitty-specs" / feature_slug
+        tasks_dir = feature_dir / "tasks"
+
+        if not tasks_dir.exists():
+            print(f"Error: Tasks directory not found: {tasks_dir}")
+            raise typer.Exit(1)
+
+        # Build full graph (reuses core/dependency_graph, same as orchestrator)
+        full_graph = build_dependency_graph(feature_dir)
+        if not full_graph:
+            result = {
+                "feature": feature_slug,
+                "waves": [],
+                "total_planned": 0,
+                "total_waves": 0,
+            }
+            print(json.dumps(result, indent=2) if json_output else "No work packages found.")
+            return
+
+        cycles = detect_cycles(full_graph)
+        if cycles:
+            cycle_strs = [" -> ".join(c) for c in cycles]
+            print("Error: Circular dependencies:\n  " + "\n  ".join(cycle_strs))
+            raise typer.Exit(1)
+
+        # Read lane for each WP
+        wp_lanes: dict[str, str] = {}
+        for wp_file in sorted(tasks_dir.glob("WP*.md")):
+            try:
+                fm, _ = read_frontmatter(wp_file)
+                wp_id = fm.get("work_package_id")
+                if wp_id:
+                    wp_lanes[wp_id] = fm.get("lane", "planned")
+            except Exception:
+                continue
+
+        planned_wps = {wid for wid, lane in wp_lanes.items() if lane == "planned"}
+        satisfied_wps = {
+            wid for wid, lane in wp_lanes.items()
+            if lane in ("done", "for_review", "doing")
+        }
+
+        if not planned_wps:
+            result = {
+                "feature": feature_slug,
+                "waves": [],
+                "total_planned": 0,
+                "total_waves": 0,
+            }
+            print(
+                json.dumps(result, indent=2) if json_output
+                else "All work packages are already past the planned lane."
+            )
+            return
+
+        # Subgraph of planned WPs only
+        planned_graph = {
+            wid: full_graph.get(wid, []) for wid in planned_wps
+        }
+
+        waves = _compute_waves(planned_graph, satisfied_wps)
+
+        # Build output
+        waves_out = []
+        for wave_num, wave_wps in enumerate(waves, 1):
+            wp_entries = []
+            for wid in wave_wps:
+                deps = planned_graph.get(wid, [])
+                wp_entries.append({
+                    "id": wid,
+                    "base": _compute_base_for_wp(deps, planned_graph),
+                    "dependencies": deps,
+                })
+            waves_out.append({"wave": wave_num, "work_packages": wp_entries})
+
+        result = {
+            "feature": feature_slug,
+            "waves": waves_out,
+            "total_planned": len(planned_wps),
+            "total_waves": len(waves),
+        }
+
+        if json_output:
+            print(json.dumps(result, indent=2))
+        else:
+            print(f"Feature: {feature_slug}")
+            print(f"Planned WPs: {len(planned_wps)}, Waves: {len(waves)}")
+            print()
+            for w in waves_out:
+                print(f"Wave {w['wave']}:")
+                for wp in w["work_packages"]:
+                    base = f" --base {wp['base']}" if wp["base"] else ""
+                    deps = f" (deps: {', '.join(wp['dependencies'])})" if wp["dependencies"] else ""
+                    print(f"  {wp['id']}{base}{deps}")
+                print()
+
+    except typer.Exit:
+        raise
+    except Exception as e:
+        print(f"Error: {e}")
+        raise typer.Exit(1)
