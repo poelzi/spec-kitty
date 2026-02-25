@@ -307,3 +307,35 @@ def test_specify_plan_tasks_templates_avoid_main_master_branch_names():
         for path in missing_upstream_branch_references:
             msg += f"\n{path}\n"
         pytest.fail(msg)
+
+
+def test_implement_all_template_uses_explicit_feature_flag():
+    """implement-all orchestration must pin one feature for all CLI calls.
+
+    Prevents cross-feature auto-detection mistakes when multiple incomplete
+    features exist in the same repository.
+    """
+    spec_kitty_root = Path(__file__).parent.parent
+    template_path = (
+        spec_kitty_root
+        / "src"
+        / "specify_cli"
+        / "missions"
+        / "software-dev"
+        / "command-templates"
+        / "implement-all.md"
+    )
+
+    assert template_path.exists(), "implement-all template not found"
+
+    content = template_path.read_text(encoding="utf-8")
+
+    assert "spec-kitty agent workflow schedule --json --feature <feature-slug>" in content, (
+        "implement-all must call schedule with explicit --feature"
+    )
+    assert "/spec-kitty.implement <WP_ID> --feature <feature-slug>" in content, (
+        "implement-all must pass --feature to subagent implement calls"
+    )
+    assert "spec-kitty agent tasks status --json --feature <feature-slug>" in content, (
+        "implement-all must pass --feature when checking task status"
+    )

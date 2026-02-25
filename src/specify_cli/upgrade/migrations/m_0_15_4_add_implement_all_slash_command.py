@@ -41,7 +41,8 @@ class AddImplementAllSlashCommandMigration(BaseMigration):
         return f"spec-kitty.{stem}.{ext}" if ext else f"spec-kitty.{stem}"
 
     def detect(self, project_path: Path) -> bool:
-        """Return True if template is missing from any configured agent."""
+        """Return True if template is missing or differs for any configured agent."""
+        package_template = self._find_package_template()
         agent_dirs = get_agent_dirs_for_project(project_path)
 
         for agent_root, subdir in agent_dirs:
@@ -52,7 +53,35 @@ class AddImplementAllSlashCommandMigration(BaseMigration):
             if not agent_key:
                 continue
             dest_name = self._dest_filename(agent_key)
-            if not (agent_dir / dest_name).exists():
+            dest = agent_dir / dest_name
+            if not dest.exists():
+                return True
+
+            # If we can render the canonical template, detect drift too.
+            if package_template is None:
+                continue
+
+            config = AGENT_COMMAND_CONFIG.get(agent_key)
+            if not config:
+                continue
+
+            try:
+                rendered = render_command_template(
+                    package_template,
+                    "bash",  # script_type (not used in this template)
+                    agent_key,
+                    config["arg_format"],
+                    config["ext"],
+                )
+            except Exception:
+                continue
+
+            try:
+                current = dest.read_text(encoding="utf-8")
+            except OSError:
+                return True
+
+            if current != rendered:
                 return True
 
         return False
@@ -132,8 +161,9 @@ class AddImplementAllSlashCommandMigration(BaseMigration):
                 changes.append(f"{action} {agent_root}/{subdir}/{dest_name}")
             else:
                 try:
+                    existed_before_write = dest.exists()
                     dest.write_text(rendered, encoding="utf-8")
-                    action = "Updated" if dest.exists() else "Created"
+                    action = "Updated" if existed_before_write else "Created"
                     changes.append(f"{action} {agent_root}/{subdir}/{dest_name}")
                 except OSError as e:
                     errors.append(

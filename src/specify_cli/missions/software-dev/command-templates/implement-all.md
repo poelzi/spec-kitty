@@ -17,10 +17,17 @@ directly -- you only schedule, launch, verify, and report.
 
 ## Step 1: Get the Execution Schedule
 
+Resolve a canonical feature slug first, then run schedule with that explicit
+feature so orchestration cannot drift to another in-progress feature.
+
+- If this slash command was invoked with a feature argument, use that value.
+- Otherwise, run one detection pass with `spec-kitty agent workflow schedule --json`,
+  read the returned `feature`, and reuse it for all subsequent commands.
+
 Run the schedule command to compute waves:
 
 ```bash
-spec-kitty agent workflow schedule --json
+spec-kitty agent workflow schedule --json --feature <feature-slug>
 ```
 
 This returns a JSON object with the structure:
@@ -60,16 +67,17 @@ For each wave **in order** (wave 1 first, then wave 2, etc.):
 ### 2a. Launch Subagents in Parallel
 
 For every WP in the wave, launch a **Task tool subagent** whose prompt is the
-literal slash command. Construct the prompt as follows:
+literal slash command. Construct the prompt as follows (always include the
+canonical feature slug):
 
 - If the WP's `base` field is **null** (no dependency or auto-merge):
   ```
-  /spec-kitty.implement <WP_ID>
+  /spec-kitty.implement <WP_ID> --feature <feature-slug>
   ```
 
 - If the WP's `base` field is a **WP ID** (single dependency):
   ```
-  /spec-kitty.implement <WP_ID> --base <BASE_WP_ID>
+  /spec-kitty.implement <WP_ID> --feature <feature-slug> --base <BASE_WP_ID>
   ```
 
 **Launch ALL WPs in the same wave as parallel Task tool calls in a single message.**
@@ -83,7 +91,7 @@ subagents simultaneously in one message with two Task tool calls.
 After all subagents in the wave return, run:
 
 ```bash
-spec-kitty agent tasks status --json
+spec-kitty agent tasks status --json --feature <feature-slug>
 ```
 
 Check that **every WP in the wave** has reached `for_review` (or `done`).
@@ -104,7 +112,7 @@ Check that **every WP in the wave** has reached `for_review` (or `done`).
 After all waves complete (or if stopped early), run:
 
 ```bash
-spec-kitty agent tasks status --json
+spec-kitty agent tasks status --json --feature <feature-slug>
 ```
 
 Print a summary table:
@@ -133,10 +141,13 @@ Report:
    worktree, and follows the full isolation protocol. Never give subagents freeform
    coding instructions.
 
-3. **Always pass `--base`** when the schedule specifies a non-null base. This ensures
+3. **Always pass `--feature <feature-slug>`** to schedule/status/implement invocations
+   in this run. This prevents cross-feature auto-detection mistakes.
+
+4. **Always pass `--base`** when the schedule specifies a non-null base. This ensures
    the worktree branches from the correct dependency branch.
 
-4. **Verify between waves.** Never launch wave N+1 until wave N is confirmed complete.
+5. **Verify between waves.** Never launch wave N+1 until wave N is confirmed complete.
 
-5. **Report failures immediately.** If a subagent fails, the user needs to decide
+6. **Report failures immediately.** If a subagent fails, the user needs to decide
    the next step -- don't guess.
