@@ -1,7 +1,7 @@
 ---
 work_package_id: WP07
 title: Docs, Quickstart Validation, Regression Gate
-lane: "planned"
+lane: "doing"
 dependencies:
 - WP03
 - WP04
@@ -16,8 +16,8 @@ subtasks:
 - T034
 phase: Phase 4 - Polish and Release Readiness
 assignee: ''
-agent: "codex"
-shell_pid: "3452893"
+agent: "claude-opus"
+shell_pid: "2952046"
 review_status: "has_feedback"
 reviewed_by: "Daniel Poelzleithner"
 review_feedback_file: "/tmp/spec-kitty-review-feedback-WP07.md"
@@ -166,3 +166,4 @@ Acceptance for WP07:
 - 2026-02-23T15:55:41Z – unknown – shell_pid=3452893 – lane=for_review – Ready for review: docs updated (README spec storage section, config reference, install-upgrade guide, CLI commands reference), quickstart validated against source code, regression gate passed (169/169 spec-storage tests, 312/314 core tests - 2 pre-existing jj worktree-context failures)
 - 2026-02-25T12:39:21Z – codex – shell_pid=3452893 – lane=doing – Started review via workflow command
 - 2026-02-25T12:46:37Z – codex – shell_pid=3452893 – lane=planned – Moved to planned
+- 2026-02-25T14:52:00Z – claude-opus – shell_pid=2952046 – lane=doing – Started implementation via workflow command
