@@ -189,16 +189,11 @@ spec-kitty agent config add claude codex
 # Now you have 3 agents for multi-agent workflows
 ```
 
-**Enabling cross-review**:
+**Adding review capacity**:
 
 ```bash
-# Add a reviewer agent different from your implementer
+# Add another agent to broaden implementation/review coverage
 spec-kitty agent config add codex
-# Configure in .kittify/config.yaml:
-# agents:
-#   selection:
-#     preferred_implementer: claude
-#     preferred_reviewer: codex
 ```
 
 ## Removing Agents
@@ -615,7 +610,7 @@ For more information on agent management and related topics:
 
 ### Configuration
 
-- [Configuration Reference](../reference/configuration.md) - Complete `.kittify/config.yaml` schema including agent selection strategies (preferred vs random)
+- [Configuration Reference](../reference/configuration.md) - Complete `.kittify/config.yaml` schema for agent availability
 
 ### Architecture
 
@@ -628,4 +623,3 @@ For more information on agent management and related topics:
 ### Initial Setup
 
 - [Installing spec-kitty](install-spec-kitty.md) - Initial agent selection during `spec-kitty init`
-

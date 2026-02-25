@@ -22,6 +22,7 @@ This reference lists the user-facing `spec-kitty` CLI commands and their flags e
 - `merge` - Merge a completed feature branch into the target branch and clean up resources
 - `sync` - Synchronize workspace with upstream changes
 - `ops` - Operation history and undo (git reflog)
+- `orchestrator-api` - Host contract for external orchestrators (JSON envelope interface)
 - `research` - Execute Phase 0 research workflow to scaffold artifacts
 - `upgrade` - Upgrade a Spec Kitty project to the current version
 - `list-legacy-features` - List legacy worktrees blocking 0.11.0 upgrade
@@ -57,9 +58,6 @@ This reference lists the user-facing `spec-kitty` CLI commands and their flags e
 | `--template-root TEXT` | Override default template location (useful for development mode) |
 | `--ai TEXT` | Comma-separated AI assistants (claude,codex,gemini,...) |
 | `--script TEXT` | Script type to use: `sh` or `ps` |
-| `--agent-strategy TEXT` | Agent selection strategy: `preferred` or `random` |
-| `--preferred-implementer TEXT` | Preferred agent for implementation (preferred strategy only) |
-| `--preferred-reviewer TEXT` | Preferred agent for review (preferred strategy only) |
 | `--non-interactive` / `--yes` | Disable prompts (CI/CD) |
 | `--help` | Show this message and exit |
 
@@ -70,7 +68,7 @@ spec-kitty init my-project --ai codex
 spec-kitty init my-project --ai codex,claude --script sh
 spec-kitty init . --ai codex --force
 spec-kitty init --here --ai claude
-spec-kitty init my-project --ai codex --agent-strategy random --non-interactive
+spec-kitty init my-project --ai codex --non-interactive
 ```
 
 **See Also**: `docs/non-interactive-init.md`
@@ -197,6 +195,32 @@ spec-kitty implement WP01 --json
 | `--feature TEXT` | Feature slug to target (auto-detected when omitted) |
 | `--force` | Overwrite existing research artifacts |
 | `--help` | Show this message and exit |
+
+---
+
+## spec-kitty orchestrator-api
+
+**Synopsis**: `spec-kitty orchestrator-api [OPTIONS] COMMAND [ARGS]...`
+
+**Description**: Machine-contract API for external orchestrators. Every command emits exactly one JSON envelope and exits non-zero on failure.
+
+**Options**:
+| Flag | Description |
+| --- | --- |
+| `--help` | Show this message and exit |
+
+**Commands**:
+- `contract-version` - Return host contract version and provider compatibility minimum
+- `feature-state` - Return full feature/WP state snapshot
+- `list-ready` - Return `planned` WPs whose dependencies are `done`
+- `start-implementation` - Composite claim/start transition for a WP
+- `start-review` - Move rejected WP from `for_review` back to `in_progress`
+- `transition` - Apply explicit lane transition with state-machine validation
+- `append-history` - Append activity history to a WP prompt
+- `accept-feature` - Accept a feature when all WPs are `done`
+- `merge-feature` - Run preflight and merge all WP branches
+
+**See Also**: [Orchestrator API Reference](orchestrator-api.md)
 
 ---
 

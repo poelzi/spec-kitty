@@ -82,12 +82,14 @@ graph LR
 
 </div>
 
-**Recent stable release:** `v0.15.1` (2026-02-12)
+**Recent stable release:** `v0.16.2` (2026-02-21)
+**Current 1.x alpha:** `v1.0.0a1` (2026-02-23)
 
-**0.15.x highlights:**
-- Primary branch detection now works with `main`, `master`, `develop`, and custom defaults
-- Branch routing and merge-base calculation are centralized for more predictable behavior
-- Worktree isolation and lane transitions have stronger guardrails and test coverage
+**1.x alpha highlights:**
+- Deterministic review feedback enforcement with persisted feedback file paths
+- Safer review transitions with automatic WP worktree rebase handling
+- Dashboard browser launch is now opt-in via `--open`
+- Core `orchestrate` runtime removed; orchestration now integrates via `spec-kitty orchestrator-api`
 
 **Jump to:**
 [Getting Started](#-getting-started-complete-workflow) •
@@ -101,20 +103,34 @@ graph LR
 
 ## 📌 Release Track
 
-Spec Kitty is currently published on a stable `0.15.x` track from the `main` branch.
+Spec Kitty now tracks `1.x` prereleases from `main` while `2.x` remains the experimental stream.
 
 | Branch | Version | Status | Install |
 |--------|---------|--------|---------|
-| **main** | **0.15.x** | Active stable releases | `pip install spec-kitty-cli` |
+| **main** | **1.0.0a** | Active 1.x prereleases | `pip install --pre spec-kitty-cli` |
+| **2.x** | **2.x** | Experimental next-generation development | Install from source |
 
-**For users:** install from PyPI (`pip install spec-kitty-cli`).
+**For users:** install stable from PyPI (`pip install spec-kitty-cli`) or opt into the `1.x` prerelease stream (`pip install --pre spec-kitty-cli`).
 **For contributors:** target `main` unless maintainers specify otherwise in an issue or PR discussion.
 
 ---
 
 ## 🤝 Multi-Agent Coordination for AI Coding
 
-Orchestrate multiple AI agents on a single feature with lower merge friction. Each agent works in isolated worktrees while the live dashboard tracks progress across all work packages.
+Run multi-agent delivery with an external orchestrator while keeping workflow state and guardrails in `spec-kitty`. Core CLI orchestration is exposed as `spec-kitty orchestrator-api`; there is no in-core `spec-kitty orchestrate` shim.
+
+```bash
+# Verify host contract
+spec-kitty orchestrator-api contract-version --json
+
+# Use the reference external orchestrator
+spec-kitty-orchestrator orchestrate --feature 034-my-feature --dry-run
+spec-kitty-orchestrator orchestrate --feature 034-my-feature
+```
+
+Docs:
+- External provider runbook: [`docs/how-to/run-external-orchestrator.md`](docs/how-to/run-external-orchestrator.md)
+- Custom provider guide: [`docs/how-to/build-custom-orchestrator.md`](docs/how-to/build-custom-orchestrator.md)
 
 ```mermaid
 sequenceDiagram
@@ -144,7 +160,7 @@ sequenceDiagram
 - 🔀 **Parallel execution** - Multiple WPs simultaneously
 - 🌳 **Worktree isolation** - One workspace per WP to reduce branch contention
 - 👀 **Full visibility** - Dashboard shows who's doing what
-- 🔄 **Auto-sequencing** - Dependency tracking in WP frontmatter
+- 🔒 **Security boundary** - Orchestration policy and transitions are validated at the host API boundary
 
 ---
 
@@ -644,7 +660,7 @@ Learn from real-world workflows used by teams building production software with 
 ### Featured Workflows
 
 - **[Multi-Agent Feature Development](https://github.com/Priivacy-ai/spec-kitty/blob/main/examples/multi-agent-feature-development.md)**
-  *Orchestrate 3-5 AI agents on a single large feature with parallel work packages*
+  *Coordinate 3-5 AI agents on a single large feature using an external orchestrator plus host API*
 
 - **[Parallel Implementation Tracking](https://github.com/Priivacy-ai/spec-kitty/blob/main/examples/parallel-implementation-tracking.md)**
   *Monitor multiple teams/agents delivering features simultaneously with dashboard metrics*
@@ -697,6 +713,7 @@ The `spec-kitty` command supports the following options. Every run begins with a
 | `dashboard` | Open or stop the Spec Kitty dashboard |
 | `diagnostics` | Show project health and diagnostics information |
 | `merge`     | Merge a completed feature branch into main and clean up resources |
+| `orchestrator-api` | Host contract for external orchestrators (JSON envelope interface) |
 | `research`  | Execute Phase 0 research workflow to scaffold artifacts |
 | `verify-setup` | Verify that the current environment matches Spec Kitty expectations |
 
@@ -1278,7 +1295,7 @@ Three workflows protect release quality:
    - Allows PR merges (passes)
    - Provides remediation guidance
 
-3. **release.yml** - Runs on `v*.*.*` tags
+3. **release.yml** - Runs on `v1*` tags (including prereleases like `v1.0.0a1`)
    - Full release pipeline
    - Publishes to PyPI
    - Creates GitHub Release

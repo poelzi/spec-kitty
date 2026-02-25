@@ -6,6 +6,7 @@ import json
 import os
 import re
 import shutil
+from datetime import datetime, timezone
 from importlib.resources import files
 import subprocess
 import sys
@@ -470,17 +471,26 @@ spec-kitty agent tasks move-task WP01 --to doing
         # it up and creates the branch + sets tracking in one call.
         upstream_branch = planning_branch  # e.g., "main"
 
+        # Ensure baseline feature metadata exists for downstream commands
+        # (implement/merge/mission detection rely on meta.json in every mission).
         meta_file = feature_dir / "meta.json"
-        meta = {}
+        meta: dict[str, object] = {}
         if meta_file.exists():
             try:
                 meta = json.loads(meta_file.read_text(encoding="utf-8"))
             except (json.JSONDecodeError, OSError):
                 meta = {}
 
-        # Seed branch routing so ensure_landing_branch resolves correctly
-        meta["target_branch"] = feature_slug_formatted
-        meta["upstream_branch"] = upstream_branch
+        # Seed upstream metadata so downstream commands resolve correctly
+        meta.setdefault("feature_number", f"{feature_number:03d}")
+        meta.setdefault("slug", feature_slug_formatted)
+        meta.setdefault("feature_slug", feature_slug_formatted)
+        meta.setdefault("friendly_name", feature_slug.replace("-", " ").strip())
+        meta.setdefault("mission", mission or "software-dev")
+        meta.setdefault("target_branch", feature_slug_formatted)
+        meta.setdefault("upstream_branch", upstream_branch)
+        meta.setdefault("created_at", datetime.now(timezone.utc).isoformat())
+
         meta_file.write_text(
             json.dumps(meta, indent=2, ensure_ascii=False) + "\n",
             encoding="utf-8",
@@ -504,6 +514,7 @@ spec-kitty agent tasks move-task WP01 --to doing
 
         # T013: Initialize documentation state if mission is documentation
         if mission == "documentation":
+            # Create or update meta.json with documentation_state
             meta.setdefault("mission", "documentation")
             if "documentation_state" not in meta:
                 meta["documentation_state"] = {

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import functools
 import json
 import re
 import subprocess
@@ -43,6 +44,42 @@ from specify_cli.core.git_ops import get_current_branch, resolve_target_branch
 from specify_cli.git import safe_commit
 
 console = Console()
+
+
+def _json_safe_output(func):
+    """Ensure --json mode remains machine-parseable on both success and failure."""
+
+    @functools.wraps(func)
+    def wrapper(*args, **kwargs):
+        json_output = bool(kwargs.get("json_output", False))
+        previous_quiet = console.quiet
+        if json_output:
+            console.quiet = True
+
+        wp_id = kwargs.get("wp_id")
+        if wp_id is None and args:
+            wp_id = args[0]
+
+        try:
+            return func(*args, **kwargs)
+        except typer.Exit as exc:
+            if json_output and getattr(exc, "exit_code", 1):
+                payload = {"status": "error", "error": "implement command failed"}
+                if wp_id:
+                    payload["wp_id"] = str(wp_id)
+                print(json.dumps(payload))
+            raise
+        except Exception as exc:  # pragma: no cover - defensive catch
+            if json_output:
+                payload = {"status": "error", "error": str(exc)}
+                if wp_id:
+                    payload["wp_id"] = str(wp_id)
+                print(json.dumps(payload))
+            raise typer.Exit(1)
+        finally:
+            console.quiet = previous_quiet
+
+    return wrapper
 
 
 def detect_feature_context(feature_flag: str | None = None) -> tuple[str, str]:
@@ -503,6 +540,7 @@ def _ensure_vcs_in_meta(feature_dir: Path, repo_root: Path) -> VCSBackend:
     return VCSBackend.GIT
 
 
+@_json_safe_output
 @require_main_repo
 def implement(
     wp_id: str = typer.Argument(..., help="Work package ID (e.g., WP01)"),
@@ -997,9 +1035,14 @@ def implement(
             wp.path.write_text(updated_doc, encoding="utf-8")
 
             # Commit only the WP file (safe_commit preserves staging area)
+            meta_file = feature_dir / "meta.json"
+            files_to_commit = [wp.path.resolve()]
+            if meta_file.exists():
+                files_to_commit.append(meta_file.resolve())
+
             commit_success = safe_commit(
                 repo_path=repo_root,
-                files_to_commit=[wp.path.resolve()],
+                files_to_commit=files_to_commit,
                 commit_message=commit_msg,
                 allow_empty=True,  # OK if nothing changed
             )
@@ -1020,8 +1063,12 @@ def implement(
     if json_output:
         # JSON output for scripting
         import json
+        workspace_rel = str(workspace_path.relative_to(repo_root))
         print(json.dumps({
-            "workspace_path": str(workspace_path.relative_to(repo_root)),
+            # Canonical key for consumers.
+            "workspace": workspace_rel,
+            # Backward compatibility for existing integrations.
+            "workspace_path": workspace_rel,
             "branch": branch_name,
             "feature": feature_slug,
             "wp_id": wp_id,

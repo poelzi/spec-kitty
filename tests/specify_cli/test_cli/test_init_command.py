@@ -1,8 +1,9 @@
 from __future__ import annotations
 
 import io
+import re
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 import pytest
 import yaml
@@ -399,66 +400,74 @@ def test_init_non_interactive_env_var(cli_app, monkeypatch: pytest.MonkeyPatch, 
     assert result.exit_code == 0, result.output
 
 
-def test_init_non_interactive_invalid_agent_strategy(cli_app, monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
-    app, console, _ = cli_app
+def test_init_amends_initial_commit_after_cleanup(cli_app, monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
+    """Fresh git init should end in a clean amended initial commit."""
+    app, _, _ = cli_app
     monkeypatch.chdir(tmp_path)
+
+    def fake_local_repo(override_path=None):
+        return tmp_path / "templates"
+
+    def fake_copy(local_repo: Path, project_path: Path, script: str):
+        (project_path / ".kittify" / "templates").mkdir(parents=True, exist_ok=True)
+        commands_dir = project_path / ".templates"
+        commands_dir.mkdir(parents=True, exist_ok=True)
+        return commands_dir
+
+    def fake_assets(commands_dir: Path, project_path: Path, agent_key: str, script: str):
+        (project_path / f".{agent_key}" / f"run.{script}").parent.mkdir(parents=True, exist_ok=True)
+
+    def fake_init_git_repo(project_path: Path, quiet: bool = False, console=None):
+        (project_path / ".git").mkdir(parents=True, exist_ok=True)
+        return True
+
+    git_calls: list[list[str]] = []
+
+    def fake_subprocess_run(cmd, **kwargs):
+        git_calls.append(list(cmd))
+        return MagicMock(returncode=0, stdout="", stderr="")
+
+    monkeypatch.setattr(init_module, "get_local_repo_root", fake_local_repo)
+    monkeypatch.setattr(init_module, "copy_specify_base_from_local", fake_copy)
+    monkeypatch.setattr(init_module, "generate_agent_assets", fake_assets)
+    monkeypatch.setattr(init_module, "init_git_repo", fake_init_git_repo)
+    monkeypatch.setattr(init_module, "is_git_repo", lambda path: (path / ".git").exists())
+    monkeypatch.setattr(init_module.subprocess, "run", fake_subprocess_run)
+
     runner = CliRunner()
     result = runner.invoke(
         app,
         [
             "init",
-            "bad-strategy",
+            "git-clean-demo",
             "--ai",
             "codex",
-            "--agent-strategy",
-            "fastest",
+            "--script",
+            "sh",
             "--non-interactive",
         ],
     )
-    assert result.exit_code == 1
-    console_output = console.file.getvalue()
-    assert "Invalid --agent-strategy" in console_output
+    assert result.exit_code == 0, result.output
+    assert any(call[:4] == ["git", "commit", "--amend", "--no-edit"] for call in git_calls)
 
 
-def test_init_non_interactive_random_rejects_preferred_flags(cli_app, monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
-    app, console, _ = cli_app
+def test_init_rejects_removed_agent_strategy_option(cli_app, monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
+    app, _, _ = cli_app
     monkeypatch.chdir(tmp_path)
     runner = CliRunner()
     result = runner.invoke(
         app,
         [
             "init",
-            "random-pref",
+            "bad-strategy-option",
             "--ai",
-            "codex,claude",
+            "codex",
             "--agent-strategy",
             "random",
-            "--preferred-implementer",
-            "codex",
             "--non-interactive",
         ],
     )
-    assert result.exit_code == 1
-    console_output = console.file.getvalue()
-    assert "require --agent-strategy" in console_output
+    assert result.exit_code == 2
+    plain_output = re.sub(r"\x1b\[[0-9;]*m", "", result.output)
+    assert re.search(r"No such option:\s+-{1,2}agent-strategy", plain_output)
 
-
-def test_init_non_interactive_preferred_agent_not_selected(cli_app, monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
-    app, console, _ = cli_app
-    monkeypatch.chdir(tmp_path)
-    runner = CliRunner()
-    result = runner.invoke(
-        app,
-        [
-            "init",
-            "bad-preferred",
-            "--ai",
-            "codex",
-            "--preferred-implementer",
-            "gemini",
-            "--non-interactive",
-        ],
-    )
-    assert result.exit_code == 1
-    console_output = console.file.getvalue()
-    assert "--preferred-implementer must be one of the selected agents" in console_output

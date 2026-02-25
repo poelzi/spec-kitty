@@ -553,6 +553,19 @@ def choose_mode(preference: Optional[str], repo_root: Path) -> AcceptanceMode:
     return "local"
 
 
+def _resolve_feature_branch_name(summary: AcceptanceSummary) -> str:
+    """Resolve the branch name to use in merge/cleanup guidance.
+
+    Acceptance may be executed from the target branch (e.g., main). In that case,
+    instructions must still refer to the feature branch instead of suggesting
+    deletion of the target branch.
+    """
+    branch = (summary.branch or "").strip()
+    if branch and branch not in {"HEAD", "main", "master"}:
+        return branch
+    return summary.feature
+
+
 def perform_acceptance(
     summary: AcceptanceSummary,
     *,
@@ -673,13 +686,13 @@ def perform_acceptance(
     instructions: List[str] = []
     cleanup_instructions: List[str] = []
 
-    branch = summary.branch or summary.feature
+    feature_branch = _resolve_feature_branch_name(summary)
     if mode == "pr":
         instructions.extend(
             [
-                f"Review the acceptance commit on branch `{branch}`.",
+                f"Review the acceptance commit on branch `{feature_branch}`.",
                 "Merge WP branches into the landing branch: `spec-kitty merge`",
-                f"Push the landing branch: `git push origin {branch}`",
+                f"Push the landing branch: `git push origin {feature_branch}`",
                 "Open a pull request from the landing branch referencing spec/plan/tasks artifacts.",
                 "Include acceptance summary and test evidence in the PR description.",
             ]
@@ -689,7 +702,7 @@ def perform_acceptance(
             [
                 "Merge WP branches into the landing branch: `spec-kitty merge`",
                 "Integrate landing branch into main: `spec-kitty integrate`",
-                "Or manually: `git checkout main && git merge {branch}`".format(branch=branch),
+                f"Or manually: `git checkout main && git merge {feature_branch}`",
             ]
         )
     else:  # checklist
@@ -702,7 +715,7 @@ def perform_acceptance(
             f"After merging, remove the worktree: `git worktree remove {summary.worktree_root}`"
         )
     cleanup_instructions.append(
-        f"Landing branch '{branch}' is preserved for upstream PR and future changes."
+        f"Landing branch '{feature_branch}' is preserved for upstream PR and future changes."
     )
 
     notes: List[str] = []

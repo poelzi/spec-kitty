@@ -13,6 +13,7 @@ accept_module = importlib.import_module("specify_cli.cli.commands.accept")
 dashboard_module = importlib.import_module("specify_cli.cli.commands.dashboard")
 merge_module = importlib.import_module("specify_cli.cli.commands.merge")
 research_module = importlib.import_module("specify_cli.cli.commands.research")
+lifecycle_module = importlib.import_module("specify_cli.cli.commands.lifecycle")
 verify_module = importlib.import_module("specify_cli.cli.commands.verify")
 
 
@@ -30,8 +31,26 @@ def _load_json_from_output(output: str) -> dict[str, object]:
 def test_cli_help_lists_extracted_commands() -> None:
     result = runner.invoke(cli_app, ["--help"])
     assert result.exit_code == 0
-    for name in ["research", "dashboard", "accept", "merge", "verify-setup"]:
+    for name in [
+        "research",
+        "dashboard",
+        "accept",
+        "merge",
+        "verify-setup",
+        "specify",
+        "plan",
+        "tasks",
+    ]:
         assert name in result.stdout
+
+
+def test_cli_help_simple_mode_avoids_rich_tables(monkeypatch) -> None:
+    monkeypatch.setenv("SPEC_KITTY_SIMPLE_HELP", "1")
+    result = runner.invoke(cli_app, ["--help"])
+    assert result.exit_code == 0
+    assert "Usage:" in result.stdout
+    assert "Commands:" in result.stdout
+    assert "╭" not in result.stdout
 
 
 def test_verify_setup_command_runs() -> None:
@@ -41,6 +60,46 @@ def test_verify_setup_command_runs() -> None:
     result = runner.invoke(cli_app, ["verify-setup"])
     # Should show tool checking results even when not in a project
     assert "Check Available Tools" in result.stdout or "Checking for installed tools" in result.stdout
+
+
+def test_specify_command_delegates_to_agent_lifecycle(monkeypatch) -> None:
+    captured: dict[str, object] = {}
+
+    def fake_create_feature(feature_slug: str, mission=None, json_output: bool = False):
+        captured["feature_slug"] = feature_slug
+        captured["mission"] = mission
+        captured["json_output"] = json_output
+
+    monkeypatch.setattr(lifecycle_module.agent_feature, "create_feature", fake_create_feature)
+
+    result = runner.invoke(cli_app, ["specify", "My Great Feature"])
+    assert result.exit_code == 0
+    assert captured["feature_slug"] == "my-great-feature"
+    assert captured["mission"] is None
+    assert captured["json_output"] is False
+
+
+def test_plan_and_tasks_delegate_to_agent_lifecycle(monkeypatch) -> None:
+    captured: dict[str, object] = {}
+
+    def fake_setup_plan(feature=None, json_output: bool = False):
+        captured["plan_feature"] = feature
+        captured["plan_json"] = json_output
+
+    def fake_finalize_tasks(json_output: bool = False):
+        captured["tasks_json"] = json_output
+
+    monkeypatch.setattr(lifecycle_module.agent_feature, "setup_plan", fake_setup_plan)
+    monkeypatch.setattr(lifecycle_module.agent_feature, "finalize_tasks", fake_finalize_tasks)
+
+    plan_result = runner.invoke(cli_app, ["plan", "--feature", "001-demo", "--json"])
+    tasks_result = runner.invoke(cli_app, ["tasks", "--json"])
+
+    assert plan_result.exit_code == 0
+    assert tasks_result.exit_code == 0
+    assert captured["plan_feature"] == "001-demo"
+    assert captured["plan_json"] is True
+    assert captured["tasks_json"] is True
 
 
 def test_dashboard_kill_stops_instance(monkeypatch, tmp_path: Path) -> None:
@@ -107,8 +166,50 @@ def test_accept_checklist_json_output(monkeypatch, tmp_path: Path) -> None:
         ["accept", "--mode", "checklist", "--json", "--feature", "001-demo-feature", "--allow-fail"],
     )
     assert result.exit_code == 0
+    assert result.stdout.lstrip().startswith("{")
     data = _load_json_from_output(result.stdout)
     assert data["feature"] == "001-demo-feature"
+
+
+def test_accept_json_suppresses_fallback_announcement(monkeypatch, tmp_path: Path) -> None:
+    repo_root = tmp_path / "repo"
+    repo_root.mkdir()
+
+    class DummySummary:
+        ok = True
+        lanes = {"done": ["WP01"]}
+        optional_missing: list[str] = []
+        feature = "002-auto-feature"
+
+        def outstanding(self) -> dict[str, list[str]]:
+            return {}
+
+        def to_dict(self) -> dict[str, object]:
+            return {"feature": self.feature, "lanes": self.lanes}
+
+    captured: dict[str, object] = {}
+
+    def fake_detect(_repo_root, *, announce_fallback=True):
+        captured["announce_fallback"] = announce_fallback
+        if announce_fallback:
+            print("ℹ️  Auto-selected latest incomplete: 002-auto-feature")
+        return "002-auto-feature"
+
+    monkeypatch.setattr(accept_module, "find_repo_root", lambda: repo_root)
+    monkeypatch.setattr(accept_module, "detect_feature_slug", fake_detect)
+    monkeypatch.setattr(accept_module, "choose_mode", lambda mode, _repo_root: mode)
+    monkeypatch.setattr(accept_module, "collect_feature_summary", lambda *args, **kwargs: DummySummary())
+
+    result = runner.invoke(
+        cli_app,
+        ["accept", "--mode", "checklist", "--json", "--allow-fail"],
+    )
+
+    assert result.exit_code == 0
+    assert captured["announce_fallback"] is False
+    assert result.stdout.lstrip().startswith("{")
+    data = json.loads(result.stdout)
+    assert data["feature"] == "002-auto-feature"
 
 
 def test_merge_dry_run_outputs_steps(monkeypatch, tmp_path: Path) -> None:
@@ -131,6 +232,109 @@ def test_merge_dry_run_outputs_steps(monkeypatch, tmp_path: Path) -> None:
     assert result.exit_code == 0
     assert "Dry run - would execute" in result.stdout
     assert "git checkout main" in result.stdout
+
+
+def test_merge_skips_pull_when_target_has_no_tracking(monkeypatch, tmp_path: Path) -> None:
+    repo_root = tmp_path / "repo"
+    repo_root.mkdir()
+    calls: list[list[str]] = []
+
+    def fake_run_command(cmd, capture=False, **_kwargs):
+        call = list(cmd)
+        calls.append(call)
+        if call[:3] == ["git", "rev-parse", "--abbrev-ref"]:
+            return 0, "feature/test", ""
+        if call[:3] == ["git", "rev-parse", "--git-dir"]:
+            return 0, str(repo_root / ".git"), ""
+        if call[:3] == ["git", "status", "--porcelain"]:
+            return 0, "", ""
+        if call[:2] == ["git", "checkout"]:
+            return 0, "", ""
+        if call[:2] == ["git", "merge"]:
+            return 0, "", ""
+        if call[:2] == ["git", "branch"]:
+            return 0, "", ""
+        if call[:2] == ["git", "pull"]:
+            raise AssertionError("git pull should be skipped when no tracking branch exists")
+        return 0, "", ""
+
+    monkeypatch.setattr(merge_module, "find_repo_root", lambda: repo_root)
+    monkeypatch.setattr(merge_module, "run_command", fake_run_command)
+    monkeypatch.setattr(merge_module, "check_version_compatibility", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(merge_module, "has_remote", lambda _repo: True)
+    monkeypatch.setattr(merge_module, "has_tracking_branch", lambda _repo: False)
+    monkeypatch.setattr(merge_module, "show_banner", lambda: None)
+
+    result = runner.invoke(cli_app, ["merge", "--keep-worktree", "--keep-branch"])
+    assert result.exit_code == 0
+    assert ["git", "pull", "--ff-only"] not in calls
+    assert "Skipping pull (main branch not tracking remote)" in result.stdout
+
+
+def test_merge_accepts_positional_feature_slug(monkeypatch, tmp_path: Path) -> None:
+    repo_root = tmp_path / "repo"
+    repo_root.mkdir()
+    captured: dict[str, object] = {}
+
+    def fake_run_command(cmd, capture=False, **_kwargs):
+        if cmd[:3] == ["git", "rev-parse", "--abbrev-ref"]:
+            return 0, "main", ""
+        if cmd[:3] == ["git", "rev-parse", "--git-dir"]:
+            return 0, str(repo_root / ".git"), ""
+        return 0, "", ""
+
+    monkeypatch.setattr(merge_module, "find_repo_root", lambda: repo_root)
+    monkeypatch.setattr(merge_module, "run_command", fake_run_command)
+    monkeypatch.setattr(merge_module, "check_version_compatibility", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(merge_module, "show_banner", lambda: None)
+    monkeypatch.setattr(
+        merge_module,
+        "find_wp_worktrees",
+        lambda *_args, **_kwargs: [(repo_root / ".worktrees" / "001-demo-WP01", "WP01", "001-demo-WP01")],
+    )
+    monkeypatch.setattr(
+        merge_module,
+        "run_preflight",
+        lambda **_kwargs: type(
+            "Preflight",
+            (),
+            {"passed": True, "wp_statuses": [], "target_diverged": False, "target_divergence_msg": None, "errors": [], "warnings": []},
+        )(),
+    )
+    monkeypatch.setattr(merge_module, "display_preflight_result", lambda *_args, **_kwargs: None)
+
+    def fake_merge_workspace_per_wp(**kwargs):
+        captured["feature_slug"] = kwargs["feature_slug"]
+
+    monkeypatch.setattr(merge_module, "merge_workspace_per_wp", fake_merge_workspace_per_wp)
+
+    result = runner.invoke(cli_app, ["merge", "001-demo-feature", "--dry-run"])
+    assert result.exit_code == 0
+    assert captured["feature_slug"] == "001-demo-feature"
+
+
+def test_merge_feature_on_main_reports_already_merged_when_no_sources(monkeypatch, tmp_path: Path) -> None:
+    repo_root = tmp_path / "repo"
+    repo_root.mkdir()
+
+    def fake_run_command(cmd, capture=False, **_kwargs):
+        if cmd[:3] == ["git", "rev-parse", "--abbrev-ref"]:
+            return 0, "main", ""
+        if cmd[:3] == ["git", "rev-parse", "--git-dir"]:
+            return 0, str(repo_root / ".git"), ""
+        return 0, "", ""
+
+    monkeypatch.setattr(merge_module, "find_repo_root", lambda: repo_root)
+    monkeypatch.setattr(merge_module, "run_command", fake_run_command)
+    monkeypatch.setattr(merge_module, "check_version_compatibility", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(merge_module, "show_banner", lambda: None)
+    monkeypatch.setattr(merge_module, "find_wp_worktrees", lambda *_args, **_kwargs: [])
+    monkeypatch.setattr(merge_module, "_all_feature_wps_done", lambda *_args, **_kwargs: True)
+
+    result = runner.invoke(cli_app, ["merge", "--feature", "001-demo-feature"])
+    assert result.exit_code == 0
+    assert "Nothing to merge" in result.stdout
+    assert "already merged" in result.stdout
 
 
 def test_verify_setup_json_output(monkeypatch, tmp_path: Path) -> None:

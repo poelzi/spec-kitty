@@ -1,5 +1,9 @@
 """Collision detection and warning system for mission collaboration."""
 
+from specify_cli.collaboration.identifiers import (
+    resolve_correlation_id,
+    resolve_project_uuid,
+)
 from specify_cli.collaboration.state import get_mission_roster
 from specify_cli.collaboration.session import load_session_state
 from specify_cli.events.ulid_utils import generate_event_id
@@ -108,9 +112,12 @@ def detect_collision(mission_id: str, focus: str | None, node_id: str = "cli-loc
             node_id=node_id,
             lamport_clock=clock.increment(),
             causation_id=None,
-            project_uuid=_safe_project_uuid(self_state.mission_run_id),
+            project_uuid=resolve_project_uuid(
+                mission_id=mission_id,
+                mission_run_id=self_state.mission_run_id,
+            ),
             project_slug=mission_id,
-            correlation_id=_safe_correlation_id(self_state.mission_run_id),
+            correlation_id=resolve_correlation_id(self_state.mission_run_id),
             schema_version="1.0.0",
             data_tier=0,
         )

@@ -2,6 +2,10 @@
 
 import httpx
 from datetime import datetime
+from specify_cli.collaboration.identifiers import (
+    resolve_correlation_id,
+    resolve_project_uuid,
+)
 from specify_cli.collaboration.session import (
     save_session_state,
     set_active_mission,
@@ -129,9 +133,13 @@ def join_mission(
         node_id=node_id,
         lamport_clock=clock.increment(),
         causation_id=None,
-        project_uuid=_safe_project_uuid(data.get("project_uuid")),
+        project_uuid=resolve_project_uuid(
+            mission_id=mission_id,
+            mission_run_id=data.get("mission_run_id"),
+            explicit_project_uuid=data.get("project_uuid"),
+        ),
         project_slug=data.get("project_slug", mission_id),
-        correlation_id=_safe_correlation_id(data.get("mission_run_id")),
+        correlation_id=resolve_correlation_id(data.get("mission_run_id")),
         schema_version="1.0.0",
         data_tier=0,
     )
@@ -183,9 +191,12 @@ def set_focus(mission_id: str, focus: str, node_id: str = "cli-local") -> None:
         node_id=node_id,
         lamport_clock=clock.increment(),
         causation_id=None,
-        project_uuid=_safe_project_uuid(state.mission_run_id),
+        project_uuid=resolve_project_uuid(
+            mission_id=mission_id,
+            mission_run_id=state.mission_run_id,
+        ),
         project_slug=mission_id,
-        correlation_id=_safe_correlation_id(state.mission_run_id),
+        correlation_id=resolve_correlation_id(state.mission_run_id),
         schema_version="1.0.0",
         data_tier=0,
     )
@@ -247,9 +258,12 @@ def set_drive(mission_id: str, intent: str, node_id: str = "cli-local", bypass_c
         node_id=node_id,
         lamport_clock=clock.increment(),
         causation_id=None,
-        project_uuid=_safe_project_uuid(state.mission_run_id),
+        project_uuid=resolve_project_uuid(
+            mission_id=mission_id,
+            mission_run_id=state.mission_run_id,
+        ),
         project_slug=mission_id,
-        correlation_id=_safe_correlation_id(state.mission_run_id),
+        correlation_id=resolve_correlation_id(state.mission_run_id),
         schema_version="1.0.0",
         data_tier=0,
     )
@@ -301,9 +315,12 @@ def acknowledge_warning(
         node_id=node_id,
         lamport_clock=clock.increment(),
         causation_id=warning_id,
-        project_uuid=_safe_project_uuid(state.mission_run_id),
+        project_uuid=resolve_project_uuid(
+            mission_id=mission_id,
+            mission_run_id=state.mission_run_id,
+        ),
         project_slug=mission_id,
-        correlation_id=_safe_correlation_id(state.mission_run_id),
+        correlation_id=resolve_correlation_id(state.mission_run_id),
         schema_version="1.0.0",
         data_tier=0,
     )

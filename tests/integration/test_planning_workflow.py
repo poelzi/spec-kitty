@@ -42,7 +42,7 @@ def test_create_feature_in_main_no_worktree(test_project: Path, run_cli) -> None
 
     # Verify spec.md was committed to main (create-feature makes 2 commits: spec + meta)
     log_result = subprocess.run(
-        ["git", "log", "--oneline", "-3"],
+        ["git", "log", "--oneline", "-2"],
         cwd=test_project,
         capture_output=True,
         text=True,

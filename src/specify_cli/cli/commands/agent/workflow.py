@@ -14,7 +14,11 @@ import typer
 from typing_extensions import Annotated
 
 from specify_cli.cli.commands.implement import implement as top_level_implement
-from specify_cli.core.dependency_graph import build_dependency_graph, get_dependents
+from specify_cli.core.dependency_graph import (
+    build_dependency_graph,
+    get_dependents,
+    parse_wp_dependencies,
+)
 from specify_cli.core.feature_detection import (
     FeatureDetectionError,
     detect_feature_slug,
@@ -22,12 +26,15 @@ from specify_cli.core.feature_detection import (
     get_feature_target_branch,
     get_feature_upstream_branch,
 )
+from specify_cli.core.git_ops import is_git_repo as _is_git_repo
 from specify_cli.core.git_ops import resolve_primary_branch as resolve_repo_primary_branch
 from specify_cli.core.implement_validation import (
     validate_and_resolve_base,
     validate_base_workspace_exists,
 )
-from specify_cli.core.paths import get_main_repo_root, locate_project_root
+from specify_cli.core.paths import get_main_repo_root, is_worktree_context, locate_project_root
+from specify_cli.core.vcs import get_vcs
+from specify_cli.git.commit_helpers import safe_commit
 from specify_cli.mission import get_deliverables_path, get_feature_mission_key
 from specify_cli.tasks_support import (
     append_activity_log,
@@ -275,13 +282,26 @@ def _ensure_sparse_checkout(worktree_path: Path) -> bool:
             check=False,
         )
 
-        # Remove orphaned kitty-specs if present (from before sparse-checkout was configured)
-        orphan_kitty = worktree_path / "kitty-specs"
-        if orphan_kitty.exists():
-            shutil.rmtree(orphan_kitty)
-            print(
-                "✓ Removed orphaned kitty-specs/ from worktree (now uses planning repo)"
-            )
+    # Ensure .git/info/exclude blocks the entire planning tree in WP worktrees.
+    exclude_file = git_dir / "info" / "exclude"
+    exclude_file.parent.mkdir(parents=True, exist_ok=True)
+    existing_exclude = ""
+    if exclude_file.exists():
+        try:
+            existing_exclude = exclude_file.read_text(encoding="utf-8")
+        except OSError:
+            existing_exclude = ""
+    if "kitty-specs/" not in existing_exclude:
+        entry = "# Excluded via sparse-checkout\nkitty-specs/\n"
+        updated = existing_exclude.rstrip() + "\n" + entry
+        exclude_file.write_text(updated.lstrip(), encoding="utf-8")
+
+    # Sparse-checkout metadata can be correct while files still remain on disk.
+    # Remove kitty-specs/ physically so worktree agents cannot touch planning files.
+    orphan_kitty = worktree_path / "kitty-specs"
+    if orphan_kitty.exists():
+        shutil.rmtree(orphan_kitty)
+        print("✓ Removed orphaned kitty-specs/ from worktree (now uses planning repo)")
 
     return True
 
@@ -296,29 +316,14 @@ def _resolve_tasks_dir(repo_root: Path, feature_slug: str) -> Optional[Path]:
     Returns:
         Path to tasks directory, or None if not found
     """
-    from specify_cli.core.paths import is_worktree_context
+    # Always prefer planning repo tasks to avoid stale/orphan worktree copies.
+    tasks_dir = repo_root / "kitty-specs" / feature_slug / "tasks"
 
-    cwd = Path.cwd().resolve()
-
-    # Check if we're in a worktree - if so, use worktree's kitty-specs
-    if is_worktree_context(cwd):
-        # We're in a worktree, look for kitty-specs relative to cwd
+    # Legacy fallback: if planning repo tasks are missing, try current tree.
+    if not tasks_dir.exists():
+        cwd = Path.cwd().resolve()
         if (cwd / "kitty-specs" / feature_slug).exists():
             tasks_dir = cwd / "kitty-specs" / feature_slug / "tasks"
-        else:
-            # Walk up to find kitty-specs
-            current = cwd
-            while current != current.parent:
-                if (current / "kitty-specs" / feature_slug).exists():
-                    tasks_dir = current / "kitty-specs" / feature_slug / "tasks"
-                    break
-                current = current.parent
-            else:
-                # Fallback to repo_root
-                tasks_dir = repo_root / "kitty-specs" / feature_slug / "tasks"
-    else:
-        # We're in main repo
-        tasks_dir = repo_root / "kitty-specs" / feature_slug / "tasks"
 
     if not tasks_dir.exists():
         return None
@@ -399,15 +404,25 @@ def _find_first_planned_wp(repo_root: Path, feature_slug: str) -> Optional[str]:
     # Legacy fallback: find first planned WP by file order
     wp_files = sorted(tasks_dir.glob("WP*.md"))
 
+    blocked_candidates: list[str] = []
+
     for wp_file in wp_files:
         content = wp_file.read_text(encoding="utf-8-sig")
         frontmatter, _, _ = split_frontmatter(content)
         lane = extract_scalar(frontmatter, "lane")
+        wp_id = extract_scalar(frontmatter, "work_package_id")
+
+        if not wp_id:
+            continue
 
         if lane == "planned":
-            wp_id = extract_scalar(frontmatter, "work_package_id")
-            if wp_id:
-                return wp_id
+            return wp_id
+
+        if lane == "blocked":
+            blocked_candidates.append(wp_id)
+
+    if blocked_candidates:
+        return blocked_candidates[0]
 
     return None
 
@@ -435,29 +450,10 @@ def _clear_stack_selection() -> None:
 
 @app.command(name="implement")
 def implement(
-    wp_id: Annotated[
-        Optional[str],
-        typer.Argument(
-            help="Work package ID (e.g., WP01, wp01, WP01-slug) - auto-detects first planned if omitted"
-        ),
-    ] = None,
-    feature: Annotated[
-        Optional[str],
-        typer.Option("--feature", help="Feature slug (auto-detected if omitted)"),
-    ] = None,
-    agent: Annotated[
-        Optional[str],
-        typer.Option(
-            "--agent", help="Agent name (required for auto-move to doing lane)"
-        ),
-    ] = None,
-    base: Annotated[
-        Optional[str],
-        typer.Option(
-            "--base",
-            help="Base WP to branch from (e.g., WP01) - creates worktree if provided",
-        ),
-    ] = None,
+    wp_id: Annotated[Optional[str], typer.Argument(help="Work package ID (e.g., WP01, wp01, WP01-slug) - auto-detects first actionable WP if omitted")] = None,
+    feature: Annotated[Optional[str], typer.Option("--feature", help="Feature slug (auto-detected if omitted)")] = None,
+    agent: Annotated[Optional[str], typer.Option("--agent", help="Agent name (required for auto-move to doing lane)")] = None,
+    base: Annotated[Optional[str], typer.Option("--base", help="Base WP to branch from (e.g., WP01) - creates worktree if provided")] = None,
 ) -> None:
     """Display work package prompt with implementation instructions.
 
@@ -472,7 +468,7 @@ def implement(
         spec-kitty agent workflow implement WP01 --agent claude
         spec-kitty agent workflow implement WP02 --agent claude --base WP01  # Create worktree from WP01
         spec-kitty agent workflow implement wp01 --agent codex
-        spec-kitty agent workflow implement --agent gemini  # auto-detects first planned WP
+        spec-kitty agent workflow implement --agent gemini  # auto-detects first actionable WP
     """
     try:
         # Get repo root and feature slug
@@ -524,7 +520,7 @@ def implement(
                         )
                         raise typer.Exit(1)
                 print(
-                    "Error: No planned work packages found. Specify a WP ID explicitly."
+                    "Error: No actionable work packages found. Specify a WP ID explicitly."
                 )
                 raise typer.Exit(1)
 
@@ -550,15 +546,19 @@ def implement(
             print(f"Error locating work package: {e}")
             raise typer.Exit(1)
 
+        # Auto-detect single-parent dependency base (parity with top-level implement)
+        resolved_base_input = base
+        declared_deps = parse_wp_dependencies(wp.path)
+        if resolved_base_input is None and len(declared_deps) == 1:
+            resolved_base_input = declared_deps[0]
+            print(f"Auto-detected base: {normalized_wp_id} depends on {resolved_base_input}")
+
         # Validate dependencies and resolve base workspace
-        # This will error if:
-        # - WP has single dependency but --base not provided
-        # - Provided base doesn't match declared dependencies (warning only)
         try:
             resolved_base, auto_merge = validate_and_resolve_base(
                 wp_id=normalized_wp_id,
                 wp_file=wp.path,
-                base=base,  # May be None
+                base=resolved_base_input,
                 feature_slug=feature_slug,
                 repo_root=repo_root,
             )
@@ -566,28 +566,57 @@ def implement(
             # Validation failed (e.g., missing --base for single dependency)
             raise
 
-        # If validation resolved a base (or auto-merge mode), validate base workspace exists
+        # If validation resolved a base, validate base workspace exists when still in progress.
+        # Done base WPs are already merged and should branch from feature target branch.
         if resolved_base:
-            validate_base_workspace_exists(resolved_base, feature_slug, repo_root)
-
-        # Create worktree only if explicitly requested via --base or auto-merge
-        # Don't auto-create workspaces for WPs with no dependencies and no --base
-        # (user can create manually later or provide --base explicitly)
-        if base is not None or auto_merge:
-            print(f"Creating workspace for {normalized_wp_id}...")
             try:
-                top_level_implement(
-                    wp_id=normalized_wp_id,
-                    base=resolved_base,  # None for auto-merge or no deps
-                    feature=feature_slug,
-                    json_output=False,
-                )
-            except typer.Exit:
-                # Worktree creation failed - propagate error
-                raise
+                base_wp = locate_work_package(repo_root, feature_slug, resolved_base)
+                base_lane = extract_scalar(base_wp.frontmatter, "lane") or "planned"
             except Exception as e:
-                print(f"Error creating worktree: {e}")
+                print(f"Error locating base work package {resolved_base}: {e}")
                 raise typer.Exit(1)
+
+            if base_lane != "done":
+                validate_base_workspace_exists(resolved_base, feature_slug, repo_root)
+
+        # Calculate workspace path
+        workspace_name = f"{feature_slug}-{normalized_wp_id}"
+        workspace_path = repo_root / ".worktrees" / workspace_name
+
+        # Ensure workspace exists (delegate to top-level implement for creation)
+        if not workspace_path.exists():
+            if not _is_git_repo(repo_root):
+                print("Warning: No git repository detected. Skipping workspace creation.")
+            else:
+                print(f"Creating workspace for {normalized_wp_id}...")
+                original_cwd = Path.cwd().resolve()
+                run_cwd = repo_root if is_worktree_context(original_cwd) else original_cwd
+                changed_directory = run_cwd != original_cwd
+                if changed_directory:
+                    print(f"Running workspace creation from main repository: {repo_root}")
+
+                try:
+                    if changed_directory:
+                        import os
+
+                        os.chdir(run_cwd)
+                    top_level_implement(
+                        wp_id=normalized_wp_id,
+                        base=resolved_base,  # None for auto-merge or no deps
+                        feature=feature_slug,
+                        json_output=False,
+                    )
+                except typer.Exit:
+                    # Worktree creation failed - propagate error
+                    raise
+                except Exception as e:
+                    print(f"Error creating worktree: {e}")
+                    raise typer.Exit(1)
+                finally:
+                    if changed_directory:
+                        import os
+
+                        os.chdir(original_cwd)
 
         # Load work package
         wp = locate_work_package(repo_root, feature_slug, normalized_wp_id)
@@ -637,30 +666,27 @@ def implement(
             updated_doc = build_document(updated_front, updated_body, wp.padding)
             wp.path.write_text(updated_doc, encoding="utf-8")
 
-            # Auto-commit to target branch (enables instant status sync)
-
-            actual_wp_path = wp.path.resolve()
-            commit_result = subprocess.run(
-                [
-                    "git",
-                    "commit",
-                    str(actual_wp_path),
-                    "-m",
-                    f"chore: Start {normalized_wp_id} implementation [{agent}]",
-                ],
-                cwd=main_repo_root,
-                capture_output=True,
-                text=True,
-                check=False,
-            )
-
-            if commit_result.returncode == 0:
+            # Auto-commit to target branch when git is available.
+            # Some tests/fixtures intentionally run without git.
+            if _is_git_repo(main_repo_root):
+                actual_wp_path = wp.path.resolve()
+                commit_success = safe_commit(
+                    repo_path=main_repo_root,
+                    files_to_commit=[actual_wp_path],
+                    commit_message=f"chore: Start {normalized_wp_id} implementation [{agent}]",
+                    allow_empty=True,  # OK if already in this state
+                )
+                if not commit_success:
+                    print(
+                        f"Error: Failed to commit workflow status update for {normalized_wp_id}. "
+                        "Status claim aborted."
+                    )
+                    raise typer.Exit(1)
                 print(
                     f"✓ Claimed {normalized_wp_id} (agent: {agent}, PID: {shell_pid}, target: {target_branch})"
                 )
             else:
-                # Commit failed - file might already be committed in this state
-                pass
+                print("Warning: No git repository detected. Skipping status auto-commit.")
 
             # Reload to get updated content
             wp = locate_work_package(repo_root, feature_slug, normalized_wp_id)
@@ -679,132 +705,6 @@ def implement(
         deliverables_path = None
         if mission_key == "research":
             deliverables_path = get_deliverables_path(feature_dir, feature_slug)
-
-        # Calculate workspace path
-        workspace_name = f"{feature_slug}-{normalized_wp_id}"
-        workspace_path = repo_root / ".worktrees" / workspace_name
-
-        # Resolve workspace base ref for direct git worktree creation path.
-        # For first WPs (no dependency base), this MUST be the feature landing
-        # branch, not the currently checked-out planning branch.
-        workspace_base_ref: str
-        if resolved_base:
-            workspace_base_ref = f"{feature_slug}-{resolved_base}"
-        else:
-            try:
-                workspace_base_ref = ensure_landing_branch(repo_root, feature_slug)
-            except RuntimeError as e:
-                print(f"Warning: {e}")
-                workspace_base_ref = get_feature_target_branch(repo_root, feature_slug)
-
-        in_git_worktree = (
-            subprocess.run(
-                ["git", "rev-parse", "--is-inside-work-tree"],
-                cwd=repo_root,
-                capture_output=True,
-                text=True,
-                check=False,
-            ).returncode
-            == 0
-        )
-        if in_git_worktree:
-            base_ref_exists = (
-                subprocess.run(
-                    ["git", "rev-parse", "--verify", workspace_base_ref],
-                    cwd=repo_root,
-                    capture_output=True,
-                    check=False,
-                ).returncode
-                == 0
-            )
-            if not base_ref_exists:
-                print(
-                    f"Error: Could not resolve workspace base branch '{workspace_base_ref}'"
-                )
-                raise typer.Exit(1)
-
-        # Ensure workspace exists (create if needed)
-        if not workspace_path.exists():
-
-            # Ensure .worktrees directory exists
-            worktrees_dir = repo_root / ".worktrees"
-            worktrees_dir.mkdir(parents=True, exist_ok=True)
-
-            # Create worktree with sparse-checkout
-            branch_name = workspace_name
-            result = subprocess.run(
-                [
-                    "git",
-                    "worktree",
-                    "add",
-                    str(workspace_path),
-                    "-b",
-                    branch_name,
-                    workspace_base_ref,
-                ],
-                cwd=repo_root,
-                capture_output=True,
-                text=True,
-                check=False,
-            )
-
-            if result.returncode != 0:
-                print(f"Warning: Could not create workspace: {result.stderr}")
-            else:
-                # Configure sparse-checkout to exclude kitty-specs/
-                sparse_checkout_result = subprocess.run(
-                    ["git", "rev-parse", "--git-path", "info/sparse-checkout"],
-                    cwd=workspace_path,
-                    capture_output=True,
-                    text=True,
-                    check=False,
-                )
-                if sparse_checkout_result.returncode == 0:
-                    sparse_checkout_file = Path(sparse_checkout_result.stdout.strip())
-                    subprocess.run(
-                        ["git", "config", "core.sparseCheckout", "true"],
-                        cwd=workspace_path,
-                        capture_output=True,
-                        check=False,
-                    )
-                    subprocess.run(
-                        ["git", "config", "core.sparseCheckoutCone", "false"],
-                        cwd=workspace_path,
-                        capture_output=True,
-                        check=False,
-                    )
-                    sparse_checkout_file.parent.mkdir(parents=True, exist_ok=True)
-                    sparse_checkout_file.write_text(
-                        "/*\n!/kitty-specs/\n!/kitty-specs/**\n", encoding="utf-8"
-                    )
-                    subprocess.run(
-                        ["git", "read-tree", "-mu", "HEAD"],
-                        cwd=workspace_path,
-                        capture_output=True,
-                        check=False,
-                    )
-
-                    # Add .gitignore to block WP status files but allow research artifacts
-                    gitignore_path = workspace_path / ".gitignore"
-                    gitignore_entry = "# Block WP status files (managed in planning branch, prevents merge conflicts)\n# Research artifacts in kitty-specs/**/research/ are allowed\nkitty-specs/**/tasks/*.md\n"
-                    if gitignore_path.exists():
-                        content = gitignore_path.read_text(encoding="utf-8")
-                        if "kitty-specs/**/tasks/*.md" not in content:
-                            # Remove old blanket rule if present
-                            if "kitty-specs/\n" in content:
-                                content = content.replace(
-                                    "# Prevent worktree-local kitty-specs/ (status managed in main repo)\nkitty-specs/\n",
-                                    "",
-                                )
-                                content = content.replace("kitty-specs/\n", "")
-                            gitignore_path.write_text(
-                                content.rstrip() + "\n" + gitignore_entry,
-                                encoding="utf-8",
-                            )
-                    else:
-                        gitignore_path.write_text(gitignore_entry, encoding="utf-8")
-
-                print(f"✓ Created workspace: {workspace_path} (base: {workspace_base_ref})")
 
         # ALWAYS validate sparse-checkout (fixes legacy worktrees that were created
         # without sparse-checkout or where setup failed silently)
@@ -1344,31 +1244,27 @@ def review(
             updated_doc = build_document(updated_front, updated_body, wp.padding)
             wp.path.write_text(updated_doc, encoding="utf-8")
 
-            # Auto-commit to target branch (enables instant status sync)
-            import subprocess
-
-            actual_wp_path = wp.path.resolve()
-            commit_result = subprocess.run(
-                [
-                    "git",
-                    "commit",
-                    str(actual_wp_path),
-                    "-m",
-                    f"chore: Start {normalized_wp_id} review [{agent}]",
-                ],
-                cwd=main_repo_root,
-                capture_output=True,
-                text=True,
-                check=False,
-            )
-
-            if commit_result.returncode == 0:
+            # Auto-commit to target branch when git is available.
+            # Some tests/fixtures intentionally run without git.
+            if _is_git_repo(main_repo_root):
+                actual_wp_path = wp.path.resolve()
+                commit_success = safe_commit(
+                    repo_path=main_repo_root,
+                    files_to_commit=[actual_wp_path],
+                    commit_message=f"chore: Start {normalized_wp_id} review [{agent}]",
+                    allow_empty=True,  # OK if already in this state
+                )
+                if not commit_success:
+                    print(
+                        f"Error: Failed to commit workflow status update for {normalized_wp_id}. "
+                        "Review claim aborted."
+                    )
+                    raise typer.Exit(1)
                 print(
                     f"✓ Claimed {normalized_wp_id} for review (agent: {agent}, PID: {shell_pid}, target: {target_branch})"
                 )
             else:
-                # Commit failed - file might already be committed in this state
-                pass
+                print("Warning: No git repository detected. Skipping status auto-commit.")
 
             # Reload to get updated content
             wp = locate_work_package(repo_root, feature_slug, normalized_wp_id)
@@ -1383,79 +1279,27 @@ def review(
 
         # Ensure workspace exists (create if needed)
         if not workspace_path.exists():
-            import subprocess
-
-            # Ensure .worktrees directory exists
-            worktrees_dir = repo_root / ".worktrees"
-            worktrees_dir.mkdir(parents=True, exist_ok=True)
-
-            # Create worktree with sparse-checkout
-            branch_name = workspace_name
-            result = subprocess.run(
-                ["git", "worktree", "add", str(workspace_path), "-b", branch_name],
-                cwd=repo_root,
-                capture_output=True,
-                text=True,
-                check=False,
-            )
-
-            if result.returncode != 0:
-                print(f"Warning: Could not create workspace: {result.stderr}")
+            if not _is_git_repo(repo_root):
+                print("Warning: No git repository detected. Skipping workspace creation.")
             else:
-                # Configure sparse-checkout to exclude kitty-specs/
-                sparse_checkout_result = subprocess.run(
-                    ["git", "rev-parse", "--git-path", "info/sparse-checkout"],
-                    cwd=workspace_path,
-                    capture_output=True,
-                    text=True,
-                    check=False,
+                # Ensure .worktrees directory exists
+                worktrees_dir = repo_root / ".worktrees"
+                worktrees_dir.mkdir(parents=True, exist_ok=True)
+
+                # Create worktree using VCS layer (handles sparse-checkout + git/info/exclude)
+                vcs = get_vcs(repo_root)
+                create_result = vcs.create_workspace(
+                    workspace_path=workspace_path,
+                    workspace_name=workspace_name,
+                    base_branch=target_branch,
+                    repo_root=repo_root,
+                    sparse_exclude=["kitty-specs/"],
                 )
-                if sparse_checkout_result.returncode == 0:
-                    sparse_checkout_file = Path(sparse_checkout_result.stdout.strip())
-                    subprocess.run(
-                        ["git", "config", "core.sparseCheckout", "true"],
-                        cwd=workspace_path,
-                        capture_output=True,
-                        check=False,
-                    )
-                    subprocess.run(
-                        ["git", "config", "core.sparseCheckoutCone", "false"],
-                        cwd=workspace_path,
-                        capture_output=True,
-                        check=False,
-                    )
-                    sparse_checkout_file.parent.mkdir(parents=True, exist_ok=True)
-                    sparse_checkout_file.write_text(
-                        "/*\n!/kitty-specs/\n!/kitty-specs/**\n", encoding="utf-8"
-                    )
-                    subprocess.run(
-                        ["git", "read-tree", "-mu", "HEAD"],
-                        cwd=workspace_path,
-                        capture_output=True,
-                        check=False,
-                    )
 
-                    # Add .gitignore to block WP status files but allow research artifacts
-                    gitignore_path = workspace_path / ".gitignore"
-                    gitignore_entry = "# Block WP status files (managed in planning branch, prevents merge conflicts)\n# Research artifacts in kitty-specs/**/research/ are allowed\nkitty-specs/**/tasks/*.md\n"
-                    if gitignore_path.exists():
-                        content = gitignore_path.read_text(encoding="utf-8")
-                        if "kitty-specs/**/tasks/*.md" not in content:
-                            # Remove old blanket rule if present
-                            if "kitty-specs/\n" in content:
-                                content = content.replace(
-                                    "# Prevent worktree-local kitty-specs/ (status managed in main repo)\nkitty-specs/\n",
-                                    "",
-                                )
-                                content = content.replace("kitty-specs/\n", "")
-                            gitignore_path.write_text(
-                                content.rstrip() + "\n" + gitignore_entry,
-                                encoding="utf-8",
-                            )
-                    else:
-                        gitignore_path.write_text(gitignore_entry, encoding="utf-8")
-
-                print(f"✓ Created workspace: {workspace_path}")
+                if not create_result.success:
+                    print(f"Warning: Could not create workspace: {create_result.error}")
+                else:
+                    print(f"✓ Created workspace: {workspace_path}")
 
         # ALWAYS validate sparse-checkout (fixes legacy worktrees that were created
         # without sparse-checkout or where setup failed silently)

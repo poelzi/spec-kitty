@@ -7,6 +7,72 @@ All notable changes to the Spec Kitty CLI and templates are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.0.0] - 2026-02-24
+
+### 🔧 Changed
+
+- **Promoted the 1.x line to stable**: `1.0.0` supersedes `0.16.2` as the default recommended PyPI install.
+- **Release lane policy hardened**: `main` continues to publish the 1.x PyPI stream while `2.x` remains GitHub-release-only.
+
+## [1.0.0a1] - 2026-02-23
+
+### 💥 Breaking
+
+- **Bundled orchestrator removed from core CLI**: `spec-kitty orchestrate` is hard-removed with no compatibility shim. Orchestration is now externalized behind `spec-kitty orchestrator-api`.
+
+### ✅ Added
+
+- **Versioned host orchestration contract**: Added `spec-kitty orchestrator-api` command group with JSON envelope responses for:
+  `contract-version`, `feature-state`, `list-ready`, `start-implementation`, `start-review`, `transition`, `append-history`, `accept-feature`, and `merge-feature`.
+- **Boundary CI guardrail**: Added workflow checks that fail CI if bundled orchestrator runtime files are reintroduced.
+- **ADR for externalization**: Added architecture decision record documenting security rationale, host mutation authority, extensibility goals, and explicit no-shim policy.
+
+### 🐛 Fixed
+
+- **Gemini TOML parse failures (`#154`)**: TOML prompt serialization now uses backslash-safe output so generated command files parse cleanly with PowerShell/Windows-style paths.
+- **Forced-add + stale ignore behavior shipped in 1.x alpha (`#152`)**: retained safe forced add behavior for explicit status/task file commits and retained stale tracked ignore migration for `kitty-specs/**/tasks/*.md`.
+
+## [1.0.0rc1] - 2026-02-22
+
+### 🔧 Changed
+
+- **Release track shift to 1.0 RC on `main`**: project version now starts the `1.0` release-candidate stream (`1.0.0rc1`) while preserving `0.16.2` as the latest stable release.
+- **Release automation RC support**: release validation and changelog extraction now accept `X.Y.ZrcN` versions/tags, and GitHub Releases are marked prerelease automatically for `rc` tags.
+
+## [0.16.2] - 2026-02-21
+
+### 🐛 Fixed
+
+- **Deterministic review feedback capture**: `spec-kitty agent tasks move-task <WP> --to planned` now strictly requires `--review-feedback-file` (unless `--force`) and persists the absolute feedback path and content into WP metadata/prompt context.
+- **Dashboard browser side effects**: `spec-kitty dashboard` no longer auto-opens desktop browsers by default. Browser launch is now explicit via `--open`.
+- **Drift/rebase trap on review transitions**: `move-task --to for_review` now auto-rebases eligible WP worktrees onto their base branch when behind non-planning commits, removing the normal manual rebase loop while preserving safe blocking on conflicts/dirty states.
+- **WP prompt tracking reliability**: removed stale `kitty-specs/**/tasks/*.md` from tracked `.gitignore`, migrated existing projects away from that rule, and hardened workflow status commits to fail loudly if claim commits cannot be written.
+
+### 🔧 Changed
+
+- **Lane compatibility for rework cycles**: legacy `in_progress` lane values are now accepted as aliases for `doing` in shared task helpers, preventing rollback/review flows from failing on mixed-lane metadata.
+
+## [0.16.1] - 2026-02-20
+
+### 🐛 Fixed
+
+- **Merge command CWD side effects**: `spec-kitty merge` and merge executor flows now run git operations with explicit `cwd` instead of mutating global process working directory, preventing downstream command/test failures in shared sessions.
+- **Collaboration event identifier normalization**: mission collaboration events now safely normalize non-UUID mission IDs and run IDs into valid `project_uuid` and `correlation_id` values for local/offline flows.
+- **Event queue and CLI test stability**: queue path handling and release-facing tests were updated for mission-scoped queue files, ANSI-safe option error matching, and current create-feature commit ordering.
+
+## [0.16.0] - 2026-02-20
+
+### 🐛 Fixed
+
+- **Workflow implement auto-resolution**: `spec-kitty agent workflow implement` now reliably resolves the next planned WP and required base workspace across main-repo and worktree contexts, reducing manual `--base` retries and context errors.
+- **Merge preflight and no-op behavior**: `spec-kitty merge` now handles branch-only WP detection and reports already-merged/no-op scenarios cleanly instead of hard-failing.
+- **Init orchestration config cleanup**: Removed agent strategy selection from `spec-kitty init` and stopped persisting `agents.selection.strategy` in config. Preferred implementer/reviewer roles remain supported.
+
+### 🔧 Changed
+
+- **Config compatibility**: Legacy configs that still include `agents.selection.strategy` remain readable; the field is now ignored and not written back.
+- **Init UX simplification**: Init documentation and CLI help now describe preferred role selection only (no random/preferred strategy mode).
+
 ## [0.15.4] - 2026-02-24
 
 ### ✅ Added
@@ -618,7 +684,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 **Fully Non-Interactive Init Support**:
 - Added `--non-interactive` / `--yes` and `SPEC_KITTY_NON_INTERACTIVE` to disable prompts
-- Added `--agent-strategy`, `--preferred-implementer`, and `--preferred-reviewer` to expose all selection options via CLI
+- Added agent selection CLI options for orchestration workflows
 - Non-interactive mode now avoids arrow-key menus and requires `--force` for non-empty `--here` directories
 - Updated documentation for automation and CI usage
 

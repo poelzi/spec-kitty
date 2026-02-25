@@ -156,7 +156,7 @@ Given that feature description, do this:
    **IMPORTANT**: You must only ever run this command once. The JSON is provided in the terminal output - always refer to it to get the actual paths you're looking for.
 4. **Stay in the planning repository**: No worktree is created during specify.
 
-5. The spec template is bundled with spec-kitty at `src/specify_cli/missions/software-dev/templates/spec-template.md`. The template defines required sections for software development features.
+5. The spec template is bundled with spec-kitty at `src/specify_cli/missions/software-dev/templates/spec-template.md` (installed package) or `.kittify/missions/software-dev/templates/spec-template.md` (project copy). The template defines required sections for software development features.
 
 6. Do not overwrite branch routing metadata in `meta.json`.
 

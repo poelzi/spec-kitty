@@ -228,33 +228,6 @@ def _find_review_feedback_section_bounds(body: str) -> tuple[int, int, int] | No
     return section_match.start(), content_start, section_end
 
 
-def _upsert_review_feedback_section(body: str, feedback_block: str) -> str:
-    """Insert or append an entry to the Review Feedback section in a WP body."""
-    bounds = _find_review_feedback_section_bounds(body)
-
-    normalized_block = feedback_block.strip()
-    replacement = f"## Review Feedback\n\n{normalized_block}\n\n"
-
-    if bounds is None:
-        base = body.rstrip("\n")
-        if base:
-            return f"{base}\n\n{replacement}"
-        return replacement
-
-    section_start, content_start, section_end = bounds
-    existing_section = body[content_start:section_end].strip()
-
-    if normalized_block in existing_section:
-        combined_section = existing_section
-    elif existing_section:
-        combined_section = f"{existing_section}\n\n---\n\n{normalized_block}"
-    else:
-        combined_section = normalized_block
-
-    updated_section = f"## Review Feedback\n\n{combined_section}\n\n"
-    return body[:section_start] + updated_section + body[section_end:]
-
-
 def _mark_review_feedback_done_comments(body: str, actor: str, timestamp: str) -> str:
     """Mark unresolved review checklist items as done with a comment."""
     bounds = _find_review_feedback_section_bounds(body)
@@ -419,6 +392,211 @@ def _check_dependent_warnings(
                 f"     cd .worktrees/{feature_slug}-{dep} && git rebase {feature_slug}-{wp_id}"
             )
         console.print()
+
+
+def _behind_commits_touch_only_planning_artifacts(
+    worktree_path: Path,
+    check_branch: str,
+    feature_slug: str,
+) -> bool:
+    """Return True when upstream commits only touch planning/status files.
+
+    This prevents lane transitions from being blocked by commits that update
+    task metadata on the planning branch (for example mark-status/move-task).
+    """
+    merge_base_result = subprocess.run(
+        ["git", "merge-base", "HEAD", check_branch],
+        cwd=worktree_path,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        check=False,
+    )
+    if merge_base_result.returncode != 0:
+        return False
+
+    merge_base = merge_base_result.stdout.strip()
+    if not merge_base:
+        return False
+
+    # Compare merge-base..base to inspect only commits that HEAD is behind on.
+    result = subprocess.run(
+        ["git", "diff", "--name-only", f"{merge_base}..{check_branch}"],
+        cwd=worktree_path,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        check=False,
+    )
+    if result.returncode != 0:
+        return False
+
+    changed_files = [line.strip() for line in result.stdout.splitlines() if line.strip()]
+    if not changed_files:
+        return True
+
+    allowed_prefixes = (
+        f"kitty-specs/{feature_slug}/",
+        ".kittify/workspaces/",
+    )
+    return all(path.startswith(allowed_prefixes) for path in changed_files)
+
+
+def _auto_rebase_worktree_if_needed(
+    repo_root: Path,
+    feature_slug: str,
+    wp_id: str,
+) -> Tuple[bool, List[str], bool]:
+    """Auto-rebase WP worktree when behind non-planning commits.
+
+    Returns:
+        (is_valid, guidance, rebased)
+    """
+    guidance: List[str] = []
+    main_repo_root = get_main_repo_root(repo_root)
+    feature_dir = main_repo_root / "kitty-specs" / feature_slug
+
+    if get_feature_mission_key(feature_dir) != "software-dev":
+        return True, [], False
+
+    worktree_path = main_repo_root / ".worktrees" / f"{feature_slug}-{wp_id}"
+    if not worktree_path.exists():
+        return True, [], False
+
+    from specify_cli.workspace_context import load_context
+    from specify_cli.core.git_ops import get_current_branch
+
+    target_branch = get_feature_target_branch(repo_root, feature_slug)
+    workspace_name = f"{feature_slug}-{wp_id}"
+    ws_context = load_context(main_repo_root, workspace_name)
+    check_branch = ws_context.base_branch if ws_context else target_branch
+
+    # If not behind base, nothing to do.
+    result = subprocess.run(
+        ["git", "rev-list", "--count", f"HEAD..{check_branch}"],
+        cwd=worktree_path,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        check=False,
+    )
+    if result.returncode != 0:
+        return True, [], False
+    try:
+        behind_count = int(result.stdout.strip() or "0")
+    except ValueError:
+        behind_count = 0
+    if behind_count <= 0:
+        return True, [], False
+
+    # Status/planning-only deltas are already safe to ignore.
+    if _behind_commits_touch_only_planning_artifacts(worktree_path, check_branch, feature_slug):
+        return True, [], False
+
+    # Don't attempt rebase in invalid git states.
+    wt_branch = get_current_branch(worktree_path)
+    if wt_branch is None:
+        guidance.append("Detached HEAD detected in worktree!")
+        guidance.append("")
+        guidance.append("Please reattach to a branch before review:")
+        guidance.append(f"  cd {worktree_path}")
+        guidance.append("  git checkout <your-branch>")
+        return False, guidance, False
+
+    state_checks = ("MERGE_HEAD", "REBASE_HEAD", "CHERRY_PICK_HEAD")
+    active_ops: List[str] = []
+    for ref in state_checks:
+        state_result = subprocess.run(
+            ["git", "rev-parse", "-q", "--verify", ref],
+            cwd=worktree_path,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            check=False,
+        )
+        if state_result.returncode == 0:
+            active_ops.append(ref.replace("_HEAD", "").lower())
+    if active_ops:
+        guidance.append("In-progress git operation detected in worktree!")
+        guidance.append("")
+        guidance.append(f"Active operation(s): {', '.join(active_ops)}")
+        guidance.append("")
+        guidance.append("Resolve or abort before review:")
+        guidance.append(f"  cd {worktree_path}")
+        guidance.append("  git status")
+        guidance.append("  git merge --abort   # if merge")
+        guidance.append("  git rebase --abort  # if rebase")
+        guidance.append("  git cherry-pick --abort  # if cherry-pick")
+        return False, guidance, False
+
+    status_result = subprocess.run(
+        ["git", "status", "--porcelain"],
+        cwd=worktree_path,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        check=False,
+    )
+    if status_result.returncode == 0 and status_result.stdout.strip():
+        guidance.append(f"{check_branch} branch has new commits not in this worktree!")
+        guidance.append("")
+        guidance.append(
+            "Cannot auto-rebase because the worktree has uncommitted changes."
+        )
+        guidance.append("Commit or stash worktree changes first, then retry:")
+        guidance.append(f"  cd {worktree_path}")
+        guidance.append("  git status")
+        guidance.append(
+            "  git add <deliverable-path-1> <deliverable-path-2> && "
+            "git commit -m \"feat: <describe implementation>\""
+        )
+        guidance.append("  # or: git stash push -u")
+        return False, guidance, False
+
+    rebase_result = subprocess.run(
+        ["git", "rebase", check_branch],
+        cwd=worktree_path,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        check=False,
+    )
+    if rebase_result.returncode == 0:
+        return True, [], True
+
+    # Cleanly abort any in-progress rebase so the operator isn't left in limbo.
+    subprocess.run(
+        ["git", "rebase", "--abort"],
+        cwd=worktree_path,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        check=False,
+    )
+
+    guidance.append(f"{check_branch} branch has new commits not in this worktree!")
+    guidance.append("")
+    guidance.append("Automatic rebase before review failed (likely conflicts).")
+    guidance.append("Resolve manually:")
+    guidance.append(f"  cd {worktree_path}")
+    guidance.append(f"  git rebase {check_branch}")
+    guidance.append("  # resolve conflicts, then: git add <files> && git rebase --continue")
+    guidance.append("")
+    guidance.append("Then retry move-task.")
+    stderr = (rebase_result.stderr or "").strip()
+    if stderr:
+        guidance.append("")
+        guidance.append("Rebase error (excerpt):")
+        for line in stderr.splitlines()[:3]:
+            guidance.append(f"  {line}")
+    return False, guidance, False
 
 
 def _validate_ready_for_review(
@@ -589,21 +767,21 @@ def _validate_ready_for_review(
                     behind_count = 0
 
             if behind_count > 0:
-                guidance.append(
-                    f"{check_branch} branch has new commits not in this worktree!"
-                )
-                guidance.append("")
-                guidance.append(
-                    f"Your branch is behind {check_branch} by {behind_count} commit(s)."
-                )
-                guidance.append("Rebase before review:")
-                guidance.append(f"  cd {worktree_path}")
-                guidance.append(f"  git rebase {check_branch}")
-                guidance.append("")
-                guidance.append(
-                    f"Then retry: spec-kitty agent tasks move-task {wp_id} --to for_review"
-                )
-                return False, guidance
+                # Allow status/planning-only commits to avoid repeated rebase friction.
+                if not _behind_commits_touch_only_planning_artifacts(
+                    worktree_path,
+                    check_branch,
+                    feature_slug,
+                ):
+                    guidance.append(f"{check_branch} branch has new commits not in this worktree!")
+                    guidance.append("")
+                    guidance.append(f"Your branch is behind {check_branch} by {behind_count} commit(s).")
+                    guidance.append("Rebase before review:")
+                    guidance.append(f"  cd {worktree_path}")
+                    guidance.append(f"  git rebase {check_branch}")
+                    guidance.append("")
+                    guidance.append(f"Then retry: spec-kitty agent tasks move-task {wp_id} --to for_review")
+                    return False, guidance
 
             # Check for uncommitted changes in worktree
             result = subprocess.run(
@@ -643,10 +821,8 @@ def _validate_ready_for_review(
                 guidance.append("")
                 guidance.append("Commit your work first:")
                 guidance.append(f"  cd {worktree_path}")
-                guidance.append("  git add -A")
-                guidance.append(
-                    f'  git commit -m "feat({wp_id}): <describe implementation>"'
-                )
+                guidance.append("  git add <deliverable-path-1> <deliverable-path-2> ...")
+                guidance.append(f"  git commit -m \"feat({wp_id}): <describe implementation>\"")
                 guidance.append("")
                 guidance.append(
                     f"Then retry: spec-kitty agent tasks move-task {wp_id} --to for_review"
@@ -681,17 +857,116 @@ def _validate_ready_for_review(
                 )
                 guidance.append("")
                 guidance.append(f"  cd {worktree_path}")
-                guidance.append("  git add -A")
-                guidance.append(
-                    f'  git commit -m "feat({wp_id}): <describe implementation>"'
-                )
+                guidance.append("  git add <deliverable-path-1> <deliverable-path-2> ...")
+                guidance.append(f"  git commit -m \"feat({wp_id}): <describe implementation>\"")
                 guidance.append("")
                 guidance.append(
                     f"Then retry: spec-kitty agent tasks move-task {wp_id} --to for_review"
                 )
                 return False, guidance
 
+            contamination_files = _list_wp_branch_kitty_specs_changes(
+                worktree_path=worktree_path,
+                base_branch=check_branch,
+            )
+            if contamination_files:
+                guidance.append("WP branch contains forbidden planning changes under kitty-specs/!")
+                guidance.append("")
+                guidance.append("Committed kitty-specs files on this WP branch:")
+                for path in contamination_files[:5]:
+                    guidance.append(f"  {path}")
+                if len(contamination_files) > 5:
+                    guidance.append(f"  ... and {len(contamination_files) - 5} more")
+                guidance.append("")
+                guidance.append("Clean the branch before moving to for_review:")
+                guidance.append(f"  cd {worktree_path}")
+                guidance.append(f"  git restore --source {check_branch} --staged --worktree -- kitty-specs/")
+                guidance.append("  git commit -m \"chore: remove planning artifacts from WP branch\"")
+                guidance.append("")
+                guidance.append(f"Then retry: spec-kitty agent tasks move-task {wp_id} --to for_review")
+                return False, guidance
+
     return True, []
+
+
+def _list_wp_branch_kitty_specs_changes(worktree_path: Path, base_branch: str) -> List[str]:
+    """Return kitty-specs/ files changed on the WP branch compared to its base."""
+    merge_base_result = subprocess.run(
+        ["git", "merge-base", "HEAD", base_branch],
+        cwd=worktree_path,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        check=False,
+    )
+    if merge_base_result.returncode != 0:
+        return []
+
+    merge_base = merge_base_result.stdout.strip()
+    if not merge_base:
+        return []
+
+    diff_result = subprocess.run(
+        ["git", "diff", "--name-only", f"{merge_base}..HEAD", "--", "kitty-specs/"],
+        cwd=worktree_path,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        check=False,
+    )
+    if diff_result.returncode != 0:
+        return []
+
+    seen: set[str] = set()
+    files: List[str] = []
+    for raw in diff_result.stdout.splitlines():
+        path = raw.strip()
+        if not path or not path.startswith("kitty-specs/"):
+            continue
+        if path in seen:
+            continue
+        seen.add(path)
+        files.append(path)
+    return files
+
+
+def _upsert_review_feedback_section(
+    body: str,
+    reviewer: str,
+    feedback_date: str,
+    feedback_path: str,
+    feedback_content: str,
+) -> str:
+    """Insert or replace the `## Review Feedback` section deterministically."""
+    section = (
+        "## Review Feedback\n\n"
+        f"**Reviewed by**: {reviewer}\n"
+        "**Status**: ❌ Changes Requested\n"
+        f"**Date**: {feedback_date}\n"
+        f"**Feedback file**: `{feedback_path}`\n\n"
+        f"{feedback_content}\n\n"
+    )
+
+    review_header = "## Review Feedback"
+    review_section_start = body.find(review_header)
+    if review_section_start != -1:
+        next_section_start = body.find("\n##", review_section_start + len(review_header))
+        if next_section_start == -1:
+            return body[:review_section_start] + section
+        return body[:review_section_start] + section + body[next_section_start:]
+
+    activity_log_start = body.find("\n## Activity Log")
+    if activity_log_start != -1:
+        before = body[:activity_log_start].rstrip()
+        after = body[activity_log_start:]
+        return f"{before}\n\n{section}{after}"
+
+    body_without_trailing = body.rstrip()
+    if body_without_trailing:
+        return f"{body_without_trailing}\n\n{section}"
+    return section
 
 
 @app.command(name="move-task")
@@ -719,7 +994,7 @@ def move_task(
         Optional[Path],
         typer.Option(
             "--review-feedback-file",
-            help="Path to review feedback file (required when moving to planned from review)",
+            help="Path to review feedback file (required for --to planned unless --force)",
         ),
     ] = None,
     reviewer: Annotated[
@@ -797,16 +1072,6 @@ def move_task(
         old_lane = wp.current_lane
         current_review_status = extract_scalar(wp.frontmatter, "review_status") or ""
 
-        resolved_review_feedback_file: Optional[Path] = None
-        if review_feedback_file is not None:
-            try:
-                resolved_review_feedback_file = _resolve_review_feedback_path(
-                    review_feedback_file
-                )
-            except (FileNotFoundError, IsADirectoryError) as exc:
-                _output_error(json_output, str(exc))
-                raise typer.Exit(1)
-
         # AGENT OWNERSHIP CHECK: Warn if agent doesn't match WP's current agent
         # This helps prevent agents from accidentally modifying WPs they don't own
         current_agent = extract_scalar(wp.frontmatter, "agent")
@@ -832,20 +1097,36 @@ def move_task(
             )
             raise typer.Exit(1)
 
-        # Validate review feedback when moving to planned (likely from review)
-        if (
-            target_lane == "planned"
-            and old_lane == "for_review"
-            and not resolved_review_feedback_file
-            and not force
-        ):
-            error_msg = f"❌ Moving {task_id} from 'for_review' to 'planned' requires review feedback.\n\n"
-            error_msg += "Please provide feedback:\n"
-            error_msg += "  1. Create feedback file: echo '**Issue**: Description' > feedback.md\n"
-            error_msg += f"  2. Run: spec-kitty agent tasks move-task {task_id} --to planned --review-feedback-file feedback.md\n\n"
-            error_msg += "OR use --force to skip feedback (not recommended)"
-            _output_error(json_output, error_msg)
-            raise typer.Exit(1)
+        resolved_review_feedback_file: Optional[Path] = None
+        review_feedback_content: Optional[str] = None
+
+        # Strictly enforce deterministic review feedback capture on planned rollbacks.
+        if target_lane == "planned" and not force:
+            if not review_feedback_file:
+                error_msg = f"❌ Moving {task_id} to 'planned' requires review feedback.\n\n"
+                error_msg += "Please provide feedback:\n"
+                error_msg += "  1. Create feedback file: echo '**Issue**: Description' > feedback.md\n"
+                error_msg += f"  2. Run: spec-kitty agent tasks move-task {task_id} --to planned --review-feedback-file feedback.md\n\n"
+                error_msg += "OR use --force to skip feedback (not recommended)"
+                _output_error(json_output, error_msg)
+                raise typer.Exit(1)
+
+            if not review_feedback_file.exists() or not review_feedback_file.is_file():
+                _output_error(
+                    json_output,
+                    f"Review feedback file not found: {review_feedback_file}",
+                )
+                raise typer.Exit(1)
+
+            review_feedback_content = review_feedback_file.read_text(encoding="utf-8").strip()
+            if not review_feedback_content:
+                _output_error(
+                    json_output,
+                    f"Review feedback file is empty: {review_feedback_file}",
+                )
+                raise typer.Exit(1)
+
+            resolved_review_feedback_file = review_feedback_file.resolve()
 
         # Validate subtasks are complete when moving to for_review or done (Issue #72)
         if target_lane in ("for_review", "done") and not force:
@@ -869,9 +1150,25 @@ def move_task(
         # Validate uncommitted changes when moving to for_review OR done
         # This catches the bug where agents edit artifacts but forget to commit
         if target_lane in ("for_review", "done"):
-            is_valid, guidance = _validate_ready_for_review(
-                repo_root, feature_slug, task_id, force
+            auto_sync_ok, auto_sync_guidance, auto_rebased = _auto_rebase_worktree_if_needed(
+                repo_root=repo_root,
+                feature_slug=feature_slug,
+                wp_id=task_id,
             )
+            if not auto_sync_ok:
+                error_msg = f"Cannot move {task_id} to {target_lane}\n\n"
+                error_msg += "\n".join(auto_sync_guidance)
+                if not force:
+                    error_msg += "\n\nOr use --force to override (not recommended)"
+                _output_error(json_output, error_msg)
+                raise typer.Exit(1)
+
+            if auto_rebased and not json_output:
+                console.print(
+                    "[cyan]→ Auto-rebased WP worktree onto latest base branch before review[/cyan]"
+                )
+
+            is_valid, guidance = _validate_ready_for_review(repo_root, feature_slug, task_id, force)
             if not is_valid:
                 error_msg = f"Cannot move {task_id} to {target_lane}\n\n"
                 error_msg += "\n".join(guidance)
@@ -895,36 +1192,31 @@ def move_task(
         if shell_pid:
             updated_front = set_scalar(updated_front, "shell_pid", shell_pid)
 
-        # Handle review feedback insertion if moving to planned with feedback
+        # Handle review feedback insertion for deterministic planned rollbacks
         updated_body = wp.body
-        if resolved_review_feedback_file:
-            # Read feedback content
-            feedback_content = resolved_review_feedback_file.read_text(
-                encoding="utf-8"
-            ).strip()
-
+        if target_lane == "planned" and review_feedback_content is not None and resolved_review_feedback_file is not None:
             # Auto-detect reviewer if not provided
-            if not reviewer:
-                reviewer = _detect_reviewer_name()
+            effective_reviewer = reviewer
+            if not effective_reviewer:
+                effective_reviewer = _detect_reviewer_name()
 
-            if not feedback_content:
-                feedback_content = "_(No feedback provided in review file.)_"
-
-            feedback_block = "\n".join(
-                [
-                    f"**Reviewed by**: {reviewer}",
-                    "**Status**: ❌ Changes Requested",
-                    f"**Date**: {datetime.now(timezone.utc).strftime('%Y-%m-%d')}",
-                    "",
-                    feedback_content,
-                ]
+            feedback_date = datetime.now(timezone.utc).strftime('%Y-%m-%d')
+            updated_body = _upsert_review_feedback_section(
+                body=updated_body,
+                reviewer=effective_reviewer,
+                feedback_date=feedback_date,
+                feedback_path=str(resolved_review_feedback_file),
+                feedback_content=review_feedback_content,
             )
 
-            updated_body = _upsert_review_feedback_section(updated_body, feedback_block)
-
-            # Update frontmatter for review status
+            # Update frontmatter for review status and source feedback path
             updated_front = set_scalar(updated_front, "review_status", "has_feedback")
-            updated_front = set_scalar(updated_front, "reviewed_by", reviewer)
+            updated_front = set_scalar(updated_front, "reviewed_by", effective_reviewer)
+            updated_front = set_scalar(
+                updated_front,
+                "review_feedback_file",
+                str(resolved_review_feedback_file),
+            )
 
         # Update reviewed_by when moving to done (approved)
         if target_lane == "done" and not extract_scalar(updated_front, "reviewed_by"):
