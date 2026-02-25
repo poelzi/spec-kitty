@@ -1,7 +1,7 @@
 ---
 work_package_id: WP07
 title: Docs, Quickstart Validation, Regression Gate
-lane: "doing"
+lane: "planned"
 dependencies:
 - WP03
 - WP04
@@ -18,7 +18,7 @@ phase: Phase 4 - Polish and Release Readiness
 assignee: ''
 agent: "codex"
 shell_pid: "3452893"
-review_status: "acknowledged"
+review_status: "has_feedback"
 reviewed_by: "Daniel Poelzleithner"
 review_feedback_file: "/tmp/spec-kitty-review-feedback-WP07.md"
 history:
@@ -162,6 +162,51 @@ Acceptance for WP07:
 
 - [x] DONE: Feedback addressed by claude-opus. <!-- done: addressed by claude-opus at 2026-02-25T15:01:33Z -->
 
+---
+
+**Reviewed by**: Daniel Poelzleithner
+**Status**: ❌ Changes Requested
+**Date**: 2026-02-25
+**Feedback file**: `/tmp/spec-kitty-review-feedback-WP07.md`
+
+**Issue 1 (blocking): docs reference `spec-kitty check`, but command is not available in current CLI**
+
+- Updated docs now suggest using `spec-kitty check` for spec-storage health in:
+  - `README.md` (Spec Storage -> Health Check)
+  - `docs/reference/configuration.md` (Spec Storage Configuration -> Behavior)
+- Running `spec-kitty --help` in this branch does not list a `check` command.
+- This makes the WP07 docs internally inconsistent and not copy-pastable for users.
+
+**Required fix**
+
+- Replace `spec-kitty check` references with commands that actually exist in this release line (for example `spec-kitty verify-setup` / `spec-kitty verify-setup --diagnostics`) and ensure all examples are executable as written.
+
+---
+
+**Issue 2 (blocking): required regression gate is not green under the documented WP07 command set**
+
+- Command from WP07 prompt:
+  - `pytest tests/specify_cli -k "context or workflow or feature_detection"`
+- Current result in this review run: collection fails with import errors (`ModuleNotFoundError` for `spec_kitty_events` and `respx`) before selector filtering can complete.
+- WP07 acceptance criteria says full gate should pass and known failures should not be left unresolved.
+
+**Required fix**
+
+- Make the WP07 gate command actually pass in the standard project dev environment (or update the gate command/docs to a selector that avoids optional-dependency collection failures), then include exact final pass output in the handoff note.
+
+---
+
+**Dependency verification (required)**
+
+- Declared dependencies (`WP03`, `WP04`, `WP05`, `WP06`) are reasonable for a docs/final-gate WP because WP07 content depends on final behavior from those work packages.
+- Dependency merge status check:
+  - All four dependency branch heads are **not merged to `main`**.
+  - All four are merged to landing branch `041-orphan-branch-spec-storage`.
+
+**Dependent check (required)**
+
+- No other work package in this feature currently declares `WP07` as a dependency.
+
 ## Activity Log
 
 - 2026-02-23T12:17:54Z - system - lane=planned - Prompt created.
@@ -171,3 +216,4 @@ Acceptance for WP07:
 - 2026-02-25T14:52:00Z – claude-opus – shell_pid=2952046 – lane=doing – Started implementation via workflow command
 - 2026-02-25T15:01:33Z – claude-opus – shell_pid=2952046 – lane=for_review – Ready for review: docs updated (README spec storage section, config reference, install/upgrade guide, CLI commands reference), quickstart validated (drift documented), regression gate passed (531 pass, 3 pre-existing worktree-context failures)
 - 2026-02-25T20:21:22Z – codex – shell_pid=3452893 – lane=doing – Started review via workflow command
+- 2026-02-25T20:23:36Z – codex – shell_pid=3452893 – lane=planned – Moved to planned
