@@ -22,6 +22,7 @@ from specify_cli.core.feature_detection import (
     detect_feature_directory,
     FeatureDetectionError,
 )
+from specify_cli.core.spec_context_info import get_spec_storage_context_info
 
 app = typer.Typer(
     name="context",
@@ -172,6 +173,64 @@ def update_context(
                 console.print(f"  Dependencies: {tech_stack['dependencies']}")
             if tech_stack.get("storage"):
                 console.print(f"  Storage: {tech_stack['storage']}")
+
+    except Exception as e:
+        if json_output:
+            print(json.dumps({"error": str(e), "success": False}))
+        else:
+            console.print(f"[red]Error:[/red] {e}")
+        sys.exit(1)
+
+
+@app.command(name="spec-storage-info")
+def spec_storage_info(
+    json_output: Annotated[
+        bool,
+        typer.Option(
+            "--json",
+            help="Output results as JSON for agent parsing"
+        )
+    ] = False,
+) -> None:
+    """Show spec storage branch, worktree path, and health status.
+
+    Displays the current spec storage topology including the configured
+    branch name, absolute worktree path, health status, and whether
+    spec storage is configured at all.
+
+    Gracefully handles legacy repos without spec_storage configuration.
+
+    Examples:
+        # Show spec storage info (human-readable)
+        spec-kitty agent context spec-storage-info
+
+        # Show as JSON for agent consumption
+        spec-kitty agent context spec-storage-info --json
+    """
+    try:
+        repo_root = locate_project_root()
+
+        info = get_spec_storage_context_info(repo_root)
+
+        if json_output:
+            result = {
+                "success": True,
+                "spec_storage": info.to_dict(),
+            }
+            print(json.dumps(result, indent=2))
+        else:
+            console.print("[bold]Spec Storage Info[/bold]")
+            console.print(f"  Configured: {'yes' if info.configured else 'no'}")
+            console.print(f"  Branch: {info.branch_name}")
+            if info.worktree_path:
+                console.print(f"  Worktree path: {info.worktree_path}")
+            else:
+                console.print("  Worktree path: [dim]not resolved[/dim]")
+            if info.health_status:
+                status_color = "green" if info.health_status == "healthy" else "yellow"
+                console.print(f"  Health: [{status_color}]{info.health_status}[/{status_color}]")
+            else:
+                console.print("  Health: [dim]unknown[/dim]")
 
     except Exception as e:
         if json_output:

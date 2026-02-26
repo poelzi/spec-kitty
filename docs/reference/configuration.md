@@ -238,6 +238,60 @@ artifacts:
 
 ---
 
+## Spec Storage Configuration (0.16.0+)
+
+Controls where planning artifacts (specs, plans, work packages) are stored. When configured, Spec Kitty uses a dedicated orphan branch managed via a git worktree to keep planning artifacts separate from development branches.
+
+**Location**: `.kittify/config.yaml` (under the `spec_storage` key)
+
+**Example**:
+
+```yaml
+spec_storage:
+  branch_name: kitty-specs
+  worktree_path: kitty-specs
+  auto_push: false
+```
+
+| Key | Type | Default | Description |
+|-----|------|---------|-------------|
+| `branch_name` | string | `kitty-specs` | Name of the orphan branch. Must be a valid git branch name. |
+| `worktree_path` | string | `kitty-specs` | Relative path from repo root for the worktree checkout. Must resolve inside the repo root. |
+| `auto_push` | boolean | `false` | Push to remote after each local commit on the spec branch. Never uses `--force`. |
+
+### Behavior
+
+- **Bootstrap**: `spec-kitty init` creates the orphan branch and worktree automatically.
+- **Validation**: `spec-kitty verify-setup` verifies worktree health. Use `--diagnostics` for detailed spec storage info.
+- **Migration**: `spec-kitty upgrade` adds the `spec_storage` block to existing projects.
+- **Legacy repos**: Projects without `spec_storage` in `config.yaml` continue using `kitty-specs/` on the development branch. Migration is explicit-only.
+
+### Health Statuses
+
+The spec worktree can report the following health states:
+
+| Status | Meaning | Resolution |
+|--------|---------|------------|
+| `healthy` | Registered, branch matches, directory exists | No action needed |
+| `missing_path` | Registered in git but directory deleted | Run `spec-kitty init` to re-create |
+| `missing_registration` | Directory exists but not in worktree list | Run `spec-kitty init` to repair |
+| `wrong_branch` | Worktree at expected path but on wrong branch | Manual resolution required |
+| `path_conflict` | Regular directory exists at worktree path | Remove or rename the directory |
+
+### Commit Policy
+
+When commands modify planning artifacts, commits to the spec branch follow these rules:
+
+- **Intended files** are staged and committed automatically.
+- **Manual edits** (files changed outside the current operation) are detected and can be included or skipped.
+- **Auto-push** (when enabled) pushes after successful commit. Push failures are logged but do not corrupt the local commit.
+
+### Merge Safety
+
+During `spec-kitty integrate`, the spec storage path is automatically excluded from merge operations. This prevents stale spec directories from being reintroduced into the target branch.
+
+---
+
 ## VCS Configuration (0.12.0+)
 
 Spec Kitty uses Git as the version control backend. Configuration options control VCS detection and behavior.

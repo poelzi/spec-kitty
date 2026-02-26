@@ -1072,6 +1072,14 @@ def move_task(
         old_lane = wp.current_lane
         current_review_status = extract_scalar(wp.frontmatter, "review_status") or ""
 
+        resolved_review_feedback_file: Optional[Path] = None
+        if review_feedback_file is not None:
+            try:
+                resolved_review_feedback_file = _resolve_review_feedback_path(review_feedback_file)
+            except (FileNotFoundError, IsADirectoryError) as exc:
+                _output_error(json_output, str(exc))
+                raise typer.Exit(1)
+
         # AGENT OWNERSHIP CHECK: Warn if agent doesn't match WP's current agent
         # This helps prevent agents from accidentally modifying WPs they don't own
         current_agent = extract_scalar(wp.frontmatter, "agent")
@@ -1101,13 +1109,14 @@ def move_task(
         review_feedback_content: Optional[str] = None
 
         # Strictly enforce deterministic review feedback capture on planned rollbacks.
-        if target_lane == "planned" and not force:
+        # This requirement is never bypassed, including with --force.
+        if target_lane == "planned":
             if not review_feedback_file:
                 error_msg = f"❌ Moving {task_id} to 'planned' requires review feedback.\n\n"
                 error_msg += "Please provide feedback:\n"
                 error_msg += "  1. Create feedback file: echo '**Issue**: Description' > feedback.md\n"
                 error_msg += f"  2. Run: spec-kitty agent tasks move-task {task_id} --to planned --review-feedback-file feedback.md\n\n"
-                error_msg += "OR use --force to skip feedback (not recommended)"
+                error_msg += "This requirement cannot be bypassed with --force."
                 _output_error(json_output, error_msg)
                 raise typer.Exit(1)
 

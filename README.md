@@ -272,6 +272,7 @@ The upgrade command automatically migrates your project structure across version
 
 | Version | Migration |
 |---------|-----------|
+| **0.16.0** | Bootstrap orphan spec branch and worktree for planning artifact storage |
 | **0.10.9** | Repair broken templates with bash script references (#62, #63, #64) |
 | **0.10.8** | Move memory/ and AGENTS.md to .kittify/ |
 | **0.10.6** | Simplify implement/review templates to use workflow commands |
@@ -1001,7 +1002,75 @@ After running `spec-kitty init`, your AI coding agent will have access to these 
 
 </details>
 
-## 🌳 Worktree Strategy
+## Spec Storage (Orphan Branch)
+
+Starting with v0.16.0, Spec Kitty stores planning artifacts (specs, plans, work packages) on a dedicated **orphan branch** managed via a git worktree. This keeps your development branches clean — no `kitty-specs/` directory in your feature or main branches.
+
+### How It Works
+
+```
+my-project/                       # Main repo (main branch)
+├── .kittify/config.yaml          # spec_storage config lives here
+├── kitty-specs/                  # Git worktree → orphan "kitty-specs" branch
+│   ├── 001-auth-system/
+│   │   ├── spec.md
+│   │   ├── plan.md
+│   │   └── tasks/WP01.md
+│   └── 002-dashboard/
+└── src/                          # Your code (development branch)
+```
+
+The `kitty-specs/` directory is a **git worktree** checked out on an orphan branch with no shared history. Planning artifacts are committed to this branch independently of your code.
+
+### Configuration
+
+Spec storage is configured in `.kittify/config.yaml`:
+
+```yaml
+spec_storage:
+  branch_name: kitty-specs     # Orphan branch name (default: "kitty-specs")
+  worktree_path: kitty-specs   # Worktree checkout path relative to repo root (default: "kitty-specs")
+  auto_push: false             # Push to remote after each commit (default: false)
+```
+
+| Key | Default | Description |
+|-----|---------|-------------|
+| `spec_storage.branch_name` | `kitty-specs` | Name of the orphan branch for planning artifacts |
+| `spec_storage.worktree_path` | `kitty-specs` | Relative path from repo root for the worktree checkout |
+| `spec_storage.auto_push` | `false` | Whether to push to remote automatically after local commits |
+
+### Setup
+
+Spec storage is bootstrapped automatically during `spec-kitty init`. For existing projects, run `spec-kitty upgrade` to migrate:
+
+```bash
+# New projects — automatic
+spec-kitty init my-project --ai claude
+
+# Existing projects — explicit migration
+spec-kitty upgrade
+```
+
+### Health Check
+
+Use `spec-kitty verify-setup` to verify spec storage health:
+
+```bash
+spec-kitty verify-setup
+```
+
+The health check reports:
+- Whether the orphan branch exists
+- Whether the worktree is registered and healthy
+- Whether the worktree directory is clean or has uncommitted changes
+
+### Legacy Compatibility
+
+Projects without a `spec_storage` block in `.kittify/config.yaml` continue to use the traditional `kitty-specs/` directory on the development branch. Migration is **explicit-only** — run `spec-kitty upgrade` to opt in.
+
+---
+
+## Worktree Strategy
 
 > **📖 Quick Start:** See the [Getting Started guide](#-getting-started-complete-workflow) for practical examples of worktree usage in context.
 

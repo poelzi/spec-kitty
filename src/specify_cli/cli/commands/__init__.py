@@ -6,6 +6,7 @@ import typer
 
 from . import accept as accept_module
 from . import agent as agent_module
+from . import change as change_module
 from . import context as context_module
 from . import dashboard as dashboard_module
 from . import implement as implement_module
@@ -37,7 +38,6 @@ def register_commands(app: typer.Typer) -> None:
     from . import merge as merge_module
     from . import mission as mission_module
     from . import ops as ops_module
-    from . import orchestrate as orchestrate_module
     from . import repair as repair_module
     from . import research as research_module
     from . import sync as sync_module

@@ -43,6 +43,7 @@ env/
 .codex/
 .claudeignore
 *.lock
+!flake.lock
 .worktrees/
 .kittify/.dashboard
 .kittify/workspaces/
@@ -75,3 +76,7 @@ sdd-*/
 # Generated PDF brochures (output of generate_pdf.py)
 spec-kitty-capabilities.pdf
 .claude/
+
+# Nix results
+result
+.direnv

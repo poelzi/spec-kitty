@@ -61,7 +61,10 @@ class TestCreateFeatureCommand:
         assert meta["slug"] == "001-test-feature"
         assert meta["feature_slug"] == "001-test-feature"
         assert meta["mission"] == "software-dev"
-        assert meta["target_branch"] == "main"
+        # In v0.15.0+, target_branch is the landing branch (feature slug)
+        # and upstream_branch is the branch you were on (main)
+        assert meta["target_branch"] == "001-test-feature"
+        assert meta["upstream_branch"] == "main"
 
     @patch("specify_cli.cli.commands.agent.feature.locate_project_root")
     @patch("specify_cli.cli.commands.agent.feature.is_git_repo")
@@ -362,7 +365,7 @@ class TestSetupPlanCommand:
 
     @patch("specify_cli.cli.commands.agent.feature.locate_project_root")
     @patch("specify_cli.cli.commands.agent.feature._find_feature_directory")
-    @patch("specify_cli.cli.commands.agent.feature._resolve_planning_branch")
+    @patch("specify_cli.cli.commands.agent.feature._resolve_planning_branch", return_value="main")
     @patch("specify_cli.cli.commands.agent.feature._ensure_branch_checked_out")
     @patch("specify_cli.cli.commands.agent.feature._commit_to_branch")
     def test_scaffolds_plan_template_json(
@@ -375,7 +378,6 @@ class TestSetupPlanCommand:
         feature_dir = tmp_path / "kitty-specs" / "001-test"
         feature_dir.mkdir(parents=True)
         mock_find.return_value = feature_dir
-        mock_resolve.return_value = "main"
 
         # Create template
         template_dir = tmp_path / ".kittify" / "templates"
@@ -403,7 +405,7 @@ class TestSetupPlanCommand:
 
     @patch("specify_cli.cli.commands.agent.feature.locate_project_root")
     @patch("specify_cli.cli.commands.agent.feature._find_feature_directory")
-    @patch("specify_cli.cli.commands.agent.feature._resolve_planning_branch")
+    @patch("specify_cli.cli.commands.agent.feature._resolve_planning_branch", return_value="main")
     @patch("specify_cli.cli.commands.agent.feature._ensure_branch_checked_out")
     @patch("specify_cli.cli.commands.agent.feature._commit_to_branch")
     def test_scaffolds_plan_template_human(
@@ -416,7 +418,6 @@ class TestSetupPlanCommand:
         feature_dir = tmp_path / "kitty-specs" / "001-test"
         feature_dir.mkdir(parents=True)
         mock_find.return_value = feature_dir
-        mock_resolve.return_value = "main"
 
         # Create template
         template_dir = tmp_path / ".kittify" / "templates"
@@ -433,7 +434,7 @@ class TestSetupPlanCommand:
 
     @patch("specify_cli.cli.commands.agent.feature.locate_project_root")
     @patch("specify_cli.cli.commands.agent.feature._find_feature_directory")
-    @patch("specify_cli.cli.commands.agent.feature._resolve_planning_branch")
+    @patch("specify_cli.cli.commands.agent.feature._resolve_planning_branch", return_value="main")
     @patch("specify_cli.cli.commands.agent.feature._ensure_branch_checked_out")
     @patch("specify_cli.cli.commands.agent.feature.files")
     def test_errors_when_template_not_found(
@@ -446,7 +447,6 @@ class TestSetupPlanCommand:
         feature_dir = tmp_path / "kitty-specs" / "001-test"
         feature_dir.mkdir(parents=True)
         mock_find.return_value = feature_dir
-        mock_resolve.return_value = "main"
 
         # No template created and package template unavailable
         package_templates = Mock()

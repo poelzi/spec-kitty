@@ -25,6 +25,10 @@ from specify_cli.core.feature_detection import (
     get_feature_upstream_branch,
 )
 from specify_cli.core.git_ops import has_remote, has_tracking_branch, run_command
+from specify_cli.core.spec_merge_safety import (
+    get_spec_path_exclusion_patterns,
+    should_exclude_from_merge,
+)
 from specify_cli.tasks_support import TaskCliError, find_repo_root
 
 
@@ -71,6 +75,124 @@ def _detect_feature_slug(repo_root: Path) -> str | None:
         return branch
 
     return None
+
+
+def _remove_spec_paths_from_staging(repo_root: Path) -> int:
+    """Remove spec storage paths from git staging area before commit.
+
+    Used after ``git merge --squash`` to prevent spec storage files from
+    being included in the squash commit.  This is the pre-commit variant
+    of spec path exclusion.
+
+    Returns the number of files unstaged.
+    """
+    exclusion_patterns = get_spec_path_exclusion_patterns(repo_root)
+    if not exclusion_patterns:
+        return 0
+
+    result = subprocess.run(
+        ["git", "diff", "--cached", "--name-only"],
+        cwd=repo_root,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if result.returncode != 0 or not result.stdout.strip():
+        return 0
+
+    staged_files = result.stdout.strip().splitlines()
+    spec_files = [
+        f for f in staged_files
+        if should_exclude_from_merge(f, exclusion_patterns)
+    ]
+
+    if not spec_files:
+        return 0
+
+    # Unstage spec files so they are not included in the commit
+    for spec_file in spec_files:
+        subprocess.run(
+            ["git", "reset", "HEAD", "--", spec_file],
+            cwd=repo_root,
+            capture_output=True,
+            check=False,
+        )
+        # Also revert the working tree copy
+        subprocess.run(
+            ["git", "checkout", "HEAD", "--", spec_file],
+            cwd=repo_root,
+            capture_output=True,
+            check=False,
+        )
+
+    if spec_files:
+        console.print(
+            f"[cyan]→ Excluded {len(spec_files)} spec storage file(s) from integration[/cyan]"
+        )
+
+    return len(spec_files)
+
+
+def _remove_spec_paths_post_merge(repo_root: Path, feature_slug: str) -> int:
+    """Remove spec storage files introduced by a non-squash merge.
+
+    After a ``git merge --no-ff``, any spec files from the landing branch
+    are already committed.  This function checks if any spec files were
+    added and creates a follow-up commit to remove them.
+
+    Returns the number of files removed.
+    """
+    exclusion_patterns = get_spec_path_exclusion_patterns(repo_root)
+    if not exclusion_patterns:
+        return 0
+
+    # Check for spec files that were added/modified in the merge commit
+    result = subprocess.run(
+        ["git", "diff", "--name-only", "HEAD~1..HEAD"],
+        cwd=repo_root,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if result.returncode != 0 or not result.stdout.strip():
+        return 0
+
+    changed_files = result.stdout.strip().splitlines()
+    spec_files = [
+        f for f in changed_files
+        if should_exclude_from_merge(f, exclusion_patterns)
+    ]
+
+    if not spec_files:
+        return 0
+
+    # Remove spec files from the working tree and stage removals
+    for spec_file in spec_files:
+        file_path = repo_root / spec_file
+        if file_path.exists():
+            subprocess.run(
+                ["git", "rm", "-f", "--", spec_file],
+                cwd=repo_root,
+                capture_output=True,
+                check=False,
+            )
+
+    # Commit the removals
+    subprocess.run(
+        [
+            "git", "commit", "-m",
+            f"chore: remove spec storage files from {feature_slug} integration",
+        ],
+        cwd=repo_root,
+        capture_output=True,
+        check=False,
+    )
+
+    console.print(
+        f"[cyan]→ Removed {len(spec_files)} stale spec storage file(s) from upstream[/cyan]"
+    )
+
+    return len(spec_files)
 
 
 @require_main_repo
@@ -263,6 +385,8 @@ def integrate(
     try:
         if strategy == "squash":
             run_command(["git", "merge", "--squash", landing_branch])
+            # Remove spec storage paths before committing (merge safety)
+            _remove_spec_paths_from_staging(repo_root)
             run_command(["git", "commit", "-m", f"Integrate {feature_slug}"])
             tracker.complete("merge", "squashed")
         else:
@@ -276,6 +400,9 @@ def integrate(
                     f"Integrate {feature_slug}",
                 ]
             )
+            # After a non-squash merge, spec files may have been introduced.
+            # Create a follow-up commit to remove them if needed.
+            _remove_spec_paths_post_merge(repo_root, feature_slug)
             tracker.complete("merge", "merged with merge commit")
     except Exception as exc:
         tracker.error("merge", str(exc))

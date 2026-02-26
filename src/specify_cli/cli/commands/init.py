@@ -2,12 +2,15 @@
 
 from __future__ import annotations
 
+import logging
 import os
 import shutil
 import subprocess
 import sys
 from pathlib import Path
 from typing import Callable
+
+logger = logging.getLogger(__name__)
 
 import httpx
 import typer
@@ -29,6 +32,7 @@ from specify_cli.core import (
     is_git_repo,
 )
 from specify_cli.core.git_ops import exclude_from_git_index
+from specify_cli.core.spec_branch_bootstrap import bootstrap_spec_storage
 from specify_cli.core.vcs import (
     is_git_available,
     VCSBackend,
@@ -431,6 +435,7 @@ def init(
     for key, label in [
         ("chmod", "Ensure scripts executable"),
         ("git", "Initialize git repository"),
+        ("spec-storage", "Bootstrap spec storage"),
         ("final", "Finalize"),
     ]:
         tracker.add(key, label)
@@ -553,6 +558,21 @@ def init(
                 tracker.start("git-hooks")
                 _install_git_hooks(project_path, templates_root=templates_root, tracker=tracker)
 
+            # Bootstrap spec storage (orphan branch + worktree)
+            if not no_git and is_git_repo(project_path):
+                tracker.start("spec-storage")
+                try:
+                    ok = bootstrap_spec_storage(project_path, console=_console)
+                    if ok:
+                        tracker.complete("spec-storage", "branch and worktree ready")
+                    else:
+                        tracker.error("spec-storage", "setup failed (non-fatal)")
+                except Exception as exc:
+                    tracker.error("spec-storage", f"error: {exc}")
+                    logger.warning("Spec storage bootstrap failed: %s", exc)
+            else:
+                tracker.skip("spec-storage", "git not available")
+
             tracker.complete("final", "project ready")
         except Exception as e:
             tracker.error("final", str(e))
@@ -639,7 +659,7 @@ def init(
     steps_lines.append("   - [cyan]/spec-kitty.implement[/] - Execute implementation from /tasks/doing/")
     steps_lines.append("   - [cyan]/spec-kitty.review[/] - Review prompts and move them to /tasks/done/")
     steps_lines.append("   - [cyan]/spec-kitty.accept[/] - Run acceptance checks and verify feature complete")
-    steps_lines.append("   - [cyan]/spec-kitty.merge[/] - Merge feature into main and cleanup worktree")
+    steps_lines.append("   - [cyan]/spec-kitty.merge[/] - Merge feature into target branch and cleanup worktree")
 
     steps_panel = Panel("\n".join(steps_lines), title="Next Steps", border_style="cyan", padding=(1,2))
     _console.print()

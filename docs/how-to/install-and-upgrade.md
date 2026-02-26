@@ -2,6 +2,11 @@
 
 Use this guide to install the Spec Kitty CLI and upgrade existing projects.
 
+## Release Tracks
+
+- **Recommended (`main` / PyPI 1.x stable)**: install from PyPI (`spec-kitty-cli`)
+- **Forward track (`2.x`)**: GitHub-only releases (`v2.*.*`) for next-generation testing
+
 ## Install from PyPI
 
 ```bash
@@ -53,6 +58,20 @@ spec-kitty upgrade --dry-run
 spec-kitty --version
 ```
 
+## Verify Spec Storage Health
+
+After upgrading to v0.16.0+, verify that spec storage (orphan branch) is correctly configured:
+
+```bash
+spec-kitty verify-setup
+```
+
+If the spec worktree is not healthy, re-run init to repair:
+
+```bash
+spec-kitty init --here --force
+```
+
 ---
 
 ## Command Reference
@@ -62,8 +81,8 @@ spec-kitty --version
 
 ## See Also
 
-- [Upgrade to 0.11.0](upgrade-to-0-11-0.md) - Breaking changes in v0.11.0
 - [Non-Interactive Init](non-interactive-init.md) - Scripted project setup
+- [Legacy 0.11 migration guide](upgrade-to-0-11-0.md) - Historical migration notes
 
 ## Background
 

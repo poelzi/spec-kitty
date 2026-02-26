@@ -22,12 +22,15 @@ Priority order:
 7. Error with clear guidance (if all features complete or ambiguous)
 """
 
+import logging
 import os
 import re
 import subprocess
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal, Mapping, Optional
+
+_logger = logging.getLogger(__name__)
 
 
 # ============================================================================
@@ -99,7 +102,7 @@ class FeatureContext:
 
         number = match.group(1)
         name = match.group(2)
-        directory = repo_root / "kitty-specs" / slug
+        directory = _resolve_spec_root(repo_root) / slug
 
         return cls(
             slug=slug,
@@ -139,6 +142,27 @@ def _get_main_repo_root(repo_root: Path) -> Path:
     return repo_root
 
 
+def _resolve_spec_root(repo_root: Path) -> Path:
+    """Return the spec artifact root for *repo_root*.
+
+    Uses the centralized :func:`resolve_spec_artifact_root` when a
+    ``spec_storage`` config exists, otherwise falls back to the legacy
+    ``repo_root / "kitty-specs"`` path.  Errors from the resolver are
+    caught and logged so that feature-detection never breaks due to a
+    misconfigured or missing worktree.
+
+    The *repo_root* parameter is first normalised to the main repo root
+    so that callers from worktree contexts get the correct result.
+    """
+    main = _get_main_repo_root(repo_root)
+    try:
+        from specify_cli.core.spec_artifact_resolver import resolve_spec_artifact_root
+        return resolve_spec_artifact_root(main, require_healthy=False)
+    except Exception as exc:
+        _logger.debug("spec_artifact_resolver unavailable, falling back: %s", exc)
+        return main / "kitty-specs"
+
+
 def _list_all_features(repo_root: Path) -> list[str]:
     """List all feature directories in kitty-specs.
 
@@ -148,14 +172,13 @@ def _list_all_features(repo_root: Path) -> list[str]:
     Returns:
         List of feature slugs (e.g., ["020-feature-a", "021-feature-b"])
     """
-    main_repo_root = _get_main_repo_root(repo_root)
-    kitty_specs_dir = main_repo_root / "kitty-specs"
+    spec_root = _resolve_spec_root(repo_root)
 
-    if not kitty_specs_dir.is_dir():
+    if not spec_root.is_dir():
         return []
 
     features = []
-    for path in kitty_specs_dir.iterdir():
+    for path in spec_root.iterdir():
         if path.is_dir() and re.match(r'^\d{3}-', path.name):
             features.append(path.name)
 
@@ -306,8 +329,7 @@ def _validate_feature_exists(slug: str, repo_root: Path) -> bool:
     Returns:
         True if feature directory exists
     """
-    main_repo_root = _get_main_repo_root(repo_root)
-    feature_dir = main_repo_root / "kitty-specs" / slug
+    feature_dir = _resolve_spec_root(repo_root) / slug
     return feature_dir.is_dir()
 
 
@@ -361,12 +383,11 @@ def find_latest_incomplete_feature(repo_root: Path) -> Optional[str]:
     if not all_features:
         return None
 
-    main_repo_root = _get_main_repo_root(repo_root)
-    kitty_specs_dir = main_repo_root / "kitty-specs"
+    spec_root = _resolve_spec_root(repo_root)
     incomplete = []
 
     for slug in all_features:
-        feature_dir = kitty_specs_dir / slug
+        feature_dir = spec_root / slug
         if not is_feature_complete(feature_dir):
             incomplete.append(slug)
 
@@ -494,10 +515,9 @@ def detect_feature(
             # Priority 7: Error (no fallback available or all features complete)
             if not detected_slug:
                 # Check if all features are complete
-                main_repo_root = _get_main_repo_root(repo_root)
-                kitty_specs_dir = main_repo_root / "kitty-specs"
+                spec_root = _resolve_spec_root(repo_root)
                 all_complete = all(
-                    is_feature_complete(kitty_specs_dir / slug)
+                    is_feature_complete(spec_root / slug)
                     for slug in all_features
                 )
 
@@ -670,7 +690,7 @@ def get_feature_target_branch(repo_root: Path, feature_slug: str) -> str:
     from specify_cli.core.git_ops import resolve_primary_branch
 
     main_repo_root = _get_main_repo_root(repo_root)
-    feature_dir = main_repo_root / "kitty-specs" / feature_slug
+    feature_dir = _resolve_spec_root(repo_root) / feature_slug
     meta_file = feature_dir / "meta.json"
 
     fallback = resolve_primary_branch(main_repo_root)
@@ -713,7 +733,7 @@ def get_feature_upstream_branch(repo_root: Path, feature_slug: str) -> str:
     import json
 
     main_repo_root = _get_main_repo_root(repo_root)
-    feature_dir = main_repo_root / "kitty-specs" / feature_slug
+    feature_dir = _resolve_spec_root(repo_root) / feature_slug
     meta_file = feature_dir / "meta.json"
 
     if not meta_file.exists():
@@ -816,7 +836,7 @@ def ensure_landing_branch(repo_root: Path, feature_slug: str) -> str:
 
     main_repo_root = _get_main_repo_root(repo_root)
     landing_branch = feature_slug
-    feature_dir = main_repo_root / "kitty-specs" / feature_slug
+    feature_dir = _resolve_spec_root(repo_root) / feature_slug
     meta_file = feature_dir / "meta.json"
 
     # Check if landing branch already exists as a git ref

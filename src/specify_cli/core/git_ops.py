@@ -294,7 +294,12 @@ def resolve_primary_branch(repo_root: Path) -> str:
     except subprocess.TimeoutExpired:
         pass
 
-    # Method 2: Check which common branch exists
+    # Method 2: Current branch (the user is standing on it for a reason)
+    current = get_current_branch(repo_root)
+    if current and current != "HEAD":
+        return current
+
+    # Method 3: Check which common branch exists
     for branch in ["main", "master", "develop"]:
         try:
             result = subprocess.run(
@@ -312,7 +317,7 @@ def resolve_primary_branch(repo_root: Path) -> str:
         except subprocess.TimeoutExpired:
             continue
 
-    # Method 3: Fallback
+    # Method 4: Fallback
     return "main"
 
 
@@ -393,13 +398,158 @@ def resolve_target_branch(
         )
 
 
+# ---------------------------------------------------------------------------
+# Orphan branch inspection helpers  (spec-storage WP01 / T004)
+# ---------------------------------------------------------------------------
+
+
+@dataclass
+class SpecBranchState:
+    """Result of inspecting a spec storage branch.
+
+    Attributes:
+        branch_name: The branch name that was inspected.
+        exists_local: True if the branch exists locally.
+        exists_remote: True if the branch exists on the default remote.
+        is_orphan: True if the branch has no shared ancestry with the
+            primary branch.  Always ``False`` when the branch does not
+            exist locally.
+        head_commit: Short SHA of the branch HEAD, or ``None`` when the
+            branch does not exist locally.
+    """
+
+    branch_name: str
+    exists_local: bool
+    exists_remote: bool
+    is_orphan: bool
+    head_commit: str | None
+
+
+def _branch_exists(repo_root: Path, ref: str) -> bool:
+    """Return ``True`` if *ref* can be resolved locally."""
+    result = subprocess.run(
+        ["git", "rev-parse", "--verify", ref],
+        cwd=repo_root,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        check=False,
+    )
+    return result.returncode == 0
+
+
+def _remote_branch_exists(
+    repo_root: Path,
+    branch: str,
+    remote: str = "origin",
+) -> bool:
+    """Return ``True`` if *remote/branch* can be resolved."""
+    return _branch_exists(repo_root, f"{remote}/{branch}")
+
+
+def _get_branch_head(repo_root: Path, branch: str) -> str | None:
+    """Return the short SHA of *branch* HEAD, or ``None``."""
+    result = subprocess.run(
+        ["git", "rev-parse", "--short", branch],
+        cwd=repo_root,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        check=False,
+    )
+    if result.returncode == 0:
+        return result.stdout.strip() or None
+    return None
+
+
+def _is_orphan_branch(
+    repo_root: Path,
+    branch: str,
+    primary_branch: str | None = None,
+) -> bool:
+    """Return ``True`` if *branch* has no common ancestor with the primary branch.
+
+    Falls back to ``resolve_primary_branch()`` when *primary_branch* is
+    ``None``.  Returns ``False`` if either branch cannot be resolved
+    (e.g. shallow clone with missing history).
+    """
+    if primary_branch is None:
+        primary_branch = resolve_primary_branch(repo_root)
+
+    # If the branch does not exist we cannot determine orphan status.
+    if not _branch_exists(repo_root, branch):
+        return False
+
+    # If the primary branch does not exist (empty repo) treat as orphan.
+    if not _branch_exists(repo_root, primary_branch):
+        return True
+
+    result = subprocess.run(
+        ["git", "merge-base", primary_branch, branch],
+        cwd=repo_root,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        check=False,
+    )
+    # Non-zero exit = no common ancestor = orphan branch.
+    return result.returncode != 0
+
+
+def inspect_spec_branch(
+    repo_root: Path,
+    branch_name: str,
+    *,
+    primary_branch: str | None = None,
+    remote: str = "origin",
+) -> SpecBranchState:
+    """Inspect the state of a spec storage branch.
+
+    Checks local existence, remote existence, orphan status, and HEAD
+    commit.  The result is a structured ``SpecBranchState`` usable by
+    init, migration, and health-check commands.
+
+    Args:
+        repo_root: Repository root directory.
+        branch_name: Branch to inspect (e.g. ``"kitty-specs"``).
+        primary_branch: Primary branch to compare against for orphan
+            detection.  Auto-detected when ``None``.
+        remote: Remote name for remote-existence checks.
+
+    Returns:
+        Populated ``SpecBranchState``.
+    """
+    exists_local = _branch_exists(repo_root, branch_name)
+    exists_remote = _remote_branch_exists(repo_root, branch_name, remote)
+
+    is_orphan = False
+    head_commit: str | None = None
+
+    if exists_local:
+        is_orphan = _is_orphan_branch(repo_root, branch_name, primary_branch)
+        head_commit = _get_branch_head(repo_root, branch_name)
+
+    return SpecBranchState(
+        branch_name=branch_name,
+        exists_local=exists_local,
+        exists_remote=exists_remote,
+        is_orphan=is_orphan,
+        head_commit=head_commit,
+    )
+
+
 __all__ = [
     "BranchResolution",
+    "SpecBranchState",
     "exclude_from_git_index",
     "get_current_branch",
     "has_remote",
     "has_tracking_branch",
     "init_git_repo",
+    "inspect_spec_branch",
     "is_git_repo",
     "resolve_primary_branch",
     "resolve_target_branch",

@@ -16,6 +16,13 @@ from specify_cli.core.tool_checker import check_tool_for_tracker
 from specify_cli.dashboard.diagnostics import run_diagnostics
 from specify_cli.tasks_support import TaskCliError, find_repo_root
 from specify_cli.verify_enhanced import run_enhanced_verify
+from specify_cli.core.spec_health import (
+    STATUS_HEALTHY,
+    STATUS_REPAIRABLE,
+    STATUS_CONFLICT,
+    STATUS_NOT_CONFIGURED,
+    check_spec_storage_health,
+)
 
 TOOL_LABELS = [
     ("git", "Git version control"),
@@ -100,6 +107,11 @@ def verify_setup(
         console=console,
     )
 
+    # Add spec storage health check
+    spec_health_data = _check_spec_storage(repo_root, json_output)
+    if json_output:
+        result["spec_storage_health"] = spec_health_data
+
     # Add tool checking results to JSON output
     if json_output and check_tools:
         result["tools"] = {key: {"available": available} for key, available in tool_statuses.items()}
@@ -109,6 +121,76 @@ def verify_setup(
         return
 
     return
+
+
+def _check_spec_storage(repo_root: Path, json_output: bool) -> dict[str, Any]:
+    """Run spec storage health check and display results.
+
+    Returns a dict suitable for JSON output.
+    """
+    try:
+        report = check_spec_storage_health(repo_root)
+    except Exception as exc:
+        if not json_output:
+            console.print(f"[dim]Spec storage health check skipped: {exc}[/dim]")
+        return {"status": "error", "message": str(exc)}
+
+    status_styles = {
+        STATUS_HEALTHY: ("[green]Healthy[/green]", "green"),
+        STATUS_REPAIRABLE: ("[yellow]Repairable[/yellow]", "yellow"),
+        STATUS_CONFLICT: ("[red]Conflict[/red]", "red"),
+        STATUS_NOT_CONFIGURED: ("[dim]Not configured (legacy)[/dim]", "dim"),
+    }
+    display, _style = status_styles.get(
+        report.health_status, ("[yellow]Unknown[/yellow]", "yellow")
+    )
+
+    if not json_output:
+        console.print()
+        console.print(f"[bold]Spec Storage Health:[/bold] {display}")
+
+        if report.issues:
+            for issue in report.issues:
+                console.print(f"  [dim]• {issue}[/dim]")
+
+        if report.repairs_available:
+            console.print("  [cyan]Available repairs:[/cyan]")
+            for repair in report.repairs_available:
+                console.print(f"    [dim]• {repair}[/dim]")
+
+        if report.branch_state and not json_output:
+            bs = report.branch_state
+            console.print(
+                f"  [dim]Branch '{bs.branch_name}': "
+                f"local={'yes' if bs.exists_local else 'no'}, "
+                f"remote={'yes' if bs.exists_remote else 'no'}, "
+                f"orphan={'yes' if bs.is_orphan else 'no'}"
+                f"[/dim]"
+            )
+
+    result: dict[str, Any] = {
+        "status": report.health_status,
+        "config_present": report.config_present,
+        "issues": report.issues,
+        "repairs_available": report.repairs_available,
+    }
+
+    if report.branch_state:
+        result["branch"] = {
+            "name": report.branch_state.branch_name,
+            "exists_local": report.branch_state.exists_local,
+            "exists_remote": report.branch_state.exists_remote,
+            "is_orphan": report.branch_state.is_orphan,
+        }
+
+    if report.worktree_state:
+        result["worktree"] = {
+            "path": report.worktree_state.path,
+            "registered": report.worktree_state.registered,
+            "health": report.worktree_state.health_status,
+        }
+
+    return result
 
 
 def _run_diagnostics_mode(json_output: bool, check_tools: bool) -> None:
