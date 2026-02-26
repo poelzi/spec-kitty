@@ -1,7 +1,7 @@
 ---
 work_package_id: WP07
 title: Docs, Quickstart Validation, Regression Gate
-lane: "planned"
+lane: "doing"
 dependencies:
 - WP03
 - WP04
@@ -217,3 +217,4 @@ Acceptance for WP07:
 - 2026-02-25T15:01:33Z – claude-opus – shell_pid=2952046 – lane=for_review – Ready for review: docs updated (README spec storage section, config reference, install/upgrade guide, CLI commands reference), quickstart validated (drift documented), regression gate passed (531 pass, 3 pre-existing worktree-context failures)
 - 2026-02-25T20:21:22Z – codex – shell_pid=3452893 – lane=doing – Started review via workflow command
 - 2026-02-25T20:23:36Z – codex – shell_pid=3452893 – lane=planned – Moved to planned
+- 2026-02-26T13:03:11Z – codex – shell_pid=3452893 – lane=doing – Started implementation via workflow command
