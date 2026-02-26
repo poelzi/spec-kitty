@@ -1,7 +1,7 @@
 ---
 work_package_id: WP07
 title: Docs, Quickstart Validation, Regression Gate
-lane: "doing"
+lane: "for_review"
 dependencies:
 - WP03
 - WP04
@@ -18,7 +18,7 @@ phase: Phase 4 - Polish and Release Readiness
 assignee: ''
 agent: "codex"
 shell_pid: "3452893"
-review_status: "has_feedback"
+review_status: "acknowledged"
 reviewed_by: "Daniel Poelzleithner"
 review_feedback_file: "/tmp/spec-kitty-review-feedback-WP07.md"
 history:
@@ -207,6 +207,8 @@ Acceptance for WP07:
 
 - No other work package in this feature currently declares `WP07` as a dependency.
 
+- [x] DONE: Feedback addressed by codex. <!-- done: addressed by codex at 2026-02-26T13:31:02Z -->
+
 ## Activity Log
 
 - 2026-02-23T12:17:54Z - system - lane=planned - Prompt created.
@@ -218,3 +220,4 @@ Acceptance for WP07:
 - 2026-02-25T20:21:22Z – codex – shell_pid=3452893 – lane=doing – Started review via workflow command
 - 2026-02-25T20:23:36Z – codex – shell_pid=3452893 – lane=planned – Moved to planned
 - 2026-02-26T13:03:11Z – codex – shell_pid=3452893 – lane=doing – Started implementation via workflow command
+- 2026-02-26T13:31:02Z – codex – shell_pid=3452893 – lane=for_review – Ready for review: replaced stale spec-kitty check docs with verify-setup/--diagnostics; added optional-dependency import guards for respx/spec_kitty_events collection; fixed legacy create-feature fallback + finalize-tasks commit_created detection; gate passes on WP07 worktree with nix develop -c pytest tests/integration -k 'spec_storage or migration or worktree or merge' (177 passed,1 xfailed,2 xpassed), nix develop -c pytest tests/specify_cli -k 'context or workflow or feature_detection' (108 passed,4 skipped), and nix build
