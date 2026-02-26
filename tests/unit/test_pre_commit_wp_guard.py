@@ -5,6 +5,15 @@ from __future__ import annotations
 import subprocess
 from pathlib import Path
 
+import pytest
+
+# The hook uses #!/usr/bin/env bash which requires /usr/bin/env to exist.
+# This is unavailable in hermetic build sandboxes (e.g. Nix).
+_needs_env = pytest.mark.skipif(
+    not Path("/usr/bin/env").exists(),
+    reason="/usr/bin/env not available (hermetic sandbox)",
+)
+
 
 def _init_repo(repo: Path) -> None:
     subprocess.run(["git", "init", "-b", "main"], cwd=repo, check=True, capture_output=True)
@@ -45,6 +54,7 @@ def _install_hook(repo: Path) -> Path:
     return hook_path
 
 
+@_needs_env
 def test_wp_branch_hook_blocks_kitty_specs(tmp_path: Path) -> None:
     repo = tmp_path / "repo"
     repo.mkdir()
@@ -75,6 +85,7 @@ def test_wp_branch_hook_blocks_kitty_specs(tmp_path: Path) -> None:
     assert "wp branches must not commit kitty-specs/" in result.stdout.lower()
 
 
+@_needs_env
 def test_wp_branch_hook_allows_non_wp_branches(tmp_path: Path) -> None:
     repo = tmp_path / "repo"
     repo.mkdir()

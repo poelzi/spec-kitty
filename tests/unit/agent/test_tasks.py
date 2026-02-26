@@ -1026,8 +1026,10 @@ class TestValidateReadyForReview:
             cwd = kwargs.get("cwd", tmp_path)
 
             if "branch" in cmd and "--show-current" in cmd:
-                # get_current_branch() call — return a valid branch name
-                return Mock(returncode=0, stdout="008-feature-WP01\n")
+                if cwd == worktree_path:
+                    return Mock(returncode=0, stdout="008-feature-WP01\n")
+                # Outside worktree (e.g. resolve_primary_branch) return main
+                return Mock(returncode=0, stdout="main\n")
             elif "status" in cmd and "--porcelain" in cmd:
                 if cwd == worktree_path:
                     return Mock(returncode=0, stdout=" M src/main.py\n")
@@ -1036,9 +1038,12 @@ class TestValidateReadyForReview:
             elif "rev-parse" in cmd and "--verify" in cmd:
                 # No in-progress operations (MERGE_HEAD, REBASE_HEAD, etc. don't exist)
                 return Mock(returncode=1, stdout="")
-            elif "rev-list" in cmd and "HEAD..main" in cmd:
-                # Not behind main
-                return Mock(returncode=0, stdout="0\n")
+            elif "rev-list" in cmd and "--count" in cmd:
+                # Behind-check: not behind any branch
+                if any("HEAD.." in arg for arg in cmd):
+                    return Mock(returncode=0, stdout="0\n")
+                # Has implementation commits (count forward)
+                return Mock(returncode=0, stdout="5\n")
             elif "rev-list" in cmd:
                 # Has implementation commits
                 return Mock(returncode=0, stdout="5\n")

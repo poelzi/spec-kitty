@@ -21,6 +21,7 @@ from specify_cli.core.dependency_graph import (
 from specify_cli.core.feature_detection import (
     FeatureDetectionError,
     detect_feature_slug,
+    get_feature_target_branch,
 )
 from specify_cli.core.paths import (
     get_main_repo_root,
@@ -939,34 +940,48 @@ def _upsert_review_feedback_section(
     feedback_path: str,
     feedback_content: str,
 ) -> str:
-    """Insert or replace the `## Review Feedback` section deterministically."""
-    section = (
-        "## Review Feedback\n\n"
+    """Insert or append an entry to the ``## Review Feedback`` section.
+
+    When the section already exists, new feedback is **appended** (separated
+    by a horizontal rule) so that the full review history is preserved across
+    multiple review cycles.
+    """
+    new_entry = (
         f"**Reviewed by**: {reviewer}\n"
-        "**Status**: ❌ Changes Requested\n"
+        f"**Status**: \u274c Changes Requested\n"
         f"**Date**: {feedback_date}\n"
         f"**Feedback file**: `{feedback_path}`\n\n"
-        f"{feedback_content}\n\n"
+        f"{feedback_content}"
     )
 
-    review_header = "## Review Feedback"
-    review_section_start = body.find(review_header)
-    if review_section_start != -1:
-        next_section_start = body.find("\n##", review_section_start + len(review_header))
-        if next_section_start == -1:
-            return body[:review_section_start] + section
-        return body[:review_section_start] + section + body[next_section_start:]
+    bounds = _find_review_feedback_section_bounds(body)
 
-    activity_log_start = body.find("\n## Activity Log")
-    if activity_log_start != -1:
-        before = body[:activity_log_start].rstrip()
-        after = body[activity_log_start:]
-        return f"{before}\n\n{section}{after}"
+    if bounds is None:
+        # No existing section -- insert before Activity Log or at end.
+        replacement = f"## Review Feedback\n\n{new_entry}\n\n"
+        activity_log_start = body.find("\n## Activity Log")
+        if activity_log_start != -1:
+            before = body[:activity_log_start].rstrip()
+            after = body[activity_log_start:]
+            return f"{before}\n\n{replacement}{after}"
+        body_without_trailing = body.rstrip()
+        if body_without_trailing:
+            return f"{body_without_trailing}\n\n{replacement}"
+        return replacement
 
-    body_without_trailing = body.rstrip()
-    if body_without_trailing:
-        return f"{body_without_trailing}\n\n{section}"
-    return section
+    section_start, content_start, section_end = bounds
+    existing_content = body[content_start:section_end].strip()
+
+    # Avoid duplicating identical feedback blocks.
+    if new_entry.strip() in existing_content:
+        combined = existing_content
+    elif existing_content:
+        combined = f"{existing_content}\n\n---\n\n{new_entry}"
+    else:
+        combined = new_entry
+
+    updated_section = f"## Review Feedback\n\n{combined}\n\n"
+    return body[:section_start] + updated_section + body[section_end:]
 
 
 @app.command(name="move-task")

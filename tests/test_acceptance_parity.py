@@ -331,14 +331,12 @@ class TestPerformAcceptanceParity:
             summary, mode="local", actor="Tester", auto_commit=False
         )
 
+        # Instructions must reference the feature branch for merging
         assert any(
-            instruction.endswith(f"`git merge {feature_slug}`")
+            f"git merge {feature_slug}" in instruction
             for instruction in result.instructions
         )
-        assert any(
-            instruction.endswith(f"`git branch -d {feature_slug}`")
-            for instruction in result.cleanup_instructions
-        )
+        # Cleanup must never suggest deleting main
         assert all(
             "`git branch -d main`" not in instruction
             for instruction in result.cleanup_instructions

@@ -14,7 +14,7 @@ import pytest
 import typer
 
 from specify_cli.cli.commands.agent.workflow import (
-    _find_first_actionable_wp,
+    _find_first_planned_wp,
     implement as agent_implement,
     review as agent_review,
 )
@@ -464,7 +464,7 @@ class TestAgentWorkflowImplement:
 
         monkeypatch.chdir(stale_tasks.parent.parent.parent)
 
-        selected = _find_first_actionable_wp(mock_repo, feature_slug)
+        selected = _find_first_planned_wp(mock_repo, feature_slug)
         assert selected == "WP02"
 
     def test_implement_aborts_when_status_claim_commit_fails(self, mock_repo, capsys):
