@@ -1312,7 +1312,7 @@ def move_task(
                 )
 
                 commit_result = subprocess.run(
-                    ["git", "commit", "-m", commit_msg],
+                    ["git", "commit", "--no-verify", "-m", commit_msg],
                     cwd=main_repo_root,
                     capture_output=True,
                     text=True,
@@ -1517,7 +1517,7 @@ def mark_status(
                 else:
                     # Commit the staged file
                     commit_result = subprocess.run(
-                        ["git", "commit", "-m", commit_msg],
+                        ["git", "commit", "--no-verify", "-m", commit_msg],
                         cwd=main_repo_root,
                         capture_output=True,
                         text=True,

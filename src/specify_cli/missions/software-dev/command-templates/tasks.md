@@ -67,7 +67,9 @@ cd $(git rev-parse --show-toplevel)
 git checkout <planning-base-branch>
 ```
 
-Work packages are generated directly in `kitty-specs/###-feature/` and committed to the planning/base branch. Worktrees are created later when implementing each work package.
+Work packages are generated directly in `kitty-specs/###-feature/` and committed by the spec-kitty CLI. Worktrees are created later when implementing each work package.
+
+**Note**: `kitty-specs/` is a git worktree on an orphan branch. Commits to spec files will NOT appear in `git log` on main. Use `git -C kitty-specs log` to see spec history. See AGENTS.md section 5a for details.
 
 ## Outline
 

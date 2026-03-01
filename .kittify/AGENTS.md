@@ -121,6 +121,38 @@ spec-kitty validate-encoding --all --fix
 
 ---
 
+## 5a. Spec Storage Architecture (Orphan Branch)
+
+**The `kitty-specs/` directory is a git worktree on a separate orphan branch -- NOT a normal tracked directory on main.**
+
+This means `kitty-specs/` has its own independent git history with no shared ancestry with main/master. Understanding this is critical to avoid confusion when running git commands.
+
+### What will NOT work
+
+- `git log` from main/HEAD will NOT show spec file changes (they live on a different branch).
+- `git merge-base main kitty-specs` will FAIL with a non-zero exit code (no common ancestor).
+- `git diff HEAD -- kitty-specs/` from main will show nothing useful.
+- `git blame kitty-specs/file.md` from main will not work.
+- Searching for "when was this spec committed" using main-branch history will find nothing.
+
+### What WILL work
+
+- `git -C kitty-specs log` -- view spec branch commit history.
+- `git -C kitty-specs diff` -- see uncommitted spec changes.
+- `git -C kitty-specs log --oneline file.md` -- history of a specific spec file.
+- Reading/writing files in `kitty-specs/` works normally (it is a real directory on disk).
+- All `spec-kitty` CLI commands handle the worktree transparently.
+
+### Rules for agents
+
+1. **Never run `git commit` directly inside `kitty-specs/`** -- use `spec-kitty` CLI commands which handle the orphan branch correctly.
+2. **Do not try to correlate spec commits with main-branch commits** by SHA or log position -- they are on independent timelines.
+3. **Do not add `kitty-specs/` to the main branch index** (`git add kitty-specs/` from the project root will not work correctly).
+4. **When checking if spec files changed**, read the files directly or use `git -C kitty-specs status` -- do not use `git status` from the project root.
+5. **Pre-commit hooks do not apply** inside the spec worktree (no `.pre-commit-config.yaml` present there).
+
+---
+
 ## 6. Git Best Practices for Agent Directories
 
 **NEVER commit agent directories to git.**

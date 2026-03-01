@@ -205,9 +205,12 @@ def commit_spec_changes(
             )
             # Continue staging other files; commit may still succeed.
 
-    # Commit
+    # Commit.
+    # Use --no-verify because the spec worktree (orphan branch) does not
+    # contain .pre-commit-config.yaml and hooks inherited from the parent
+    # repo will fail in this context.
     commit_result = subprocess.run(
-        ["git", "commit", "-m", message],
+        ["git", "commit", "--no-verify", "-m", message],
         cwd=worktree_path,
         capture_output=True,
         text=True,

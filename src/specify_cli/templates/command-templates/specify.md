@@ -16,11 +16,13 @@ cd /path/to/project/root  # Your planning repository
 
 # All planning artifacts are created in the planning repo and committed:
 # - kitty-specs/###-feature/spec.md → Created in planning repo
-# - Committed to planning/base branch (meta.json → upstream_branch, legacy fallback target_branch)
+# - Committed by the spec-kitty CLI (handles spec storage transparently)
 # - NO worktrees created
 ```
 
 **Worktrees are created later** during `/spec-kitty.implement`, not during planning.
+
+**Note**: `kitty-specs/` is a git worktree on an orphan branch. Commits to spec files will NOT appear in `git log` on main. Use `git -C kitty-specs log` to see spec history. See AGENTS.md section 5a for details.
 
 ## User Input
 

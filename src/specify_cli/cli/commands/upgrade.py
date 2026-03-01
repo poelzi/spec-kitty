@@ -122,6 +122,7 @@ def _auto_commit_upgrade_changes(
         files_to_commit=files_to_commit,
         commit_message=commit_message,
         allow_empty=False,
+        no_verify=True,
     )
     committed_paths = [str(path).replace("\\", "/") for path in files_to_commit]
 

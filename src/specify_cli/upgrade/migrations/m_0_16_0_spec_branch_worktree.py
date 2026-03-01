@@ -206,9 +206,11 @@ def _create_orphan_branch(repo_root: Path, branch_name: str) -> bool:
         # Remove all tracked files from the orphan branch index
         _run_git(["rm", "-rf", "."], cwd=tmp_wt, check=False)
 
-        # Create an initial commit (allow empty)
+        # Create an initial commit (allow empty).
+        # Use --no-verify to skip pre-commit hooks which fail in the
+        # temporary worktree (no .pre-commit-config.yaml present).
         _run_git(
-            ["commit", "--allow-empty", "-m",
+            ["commit", "--no-verify", "--allow-empty", "-m",
              "chore: initialize spec storage branch"],
             cwd=tmp_wt,
             check=True,
@@ -450,10 +452,12 @@ class SpecBranchWorktreeMigration(BaseMigration):
                 "Removed kitty-specs/ from planning branch index"
             )
 
-            # Commit the removal on planning branch
+            # Commit the removal on planning branch.
+            # Use --no-verify: this is an automated migration commit, not
+            # user-authored content; pre-commit hooks should not gate it.
             _run_git(
                 [
-                    "commit", "-m",
+                    "commit", "--no-verify", "-m",
                     "chore: migrate kitty-specs/ to orphan branch\n\n"
                     "Planning artifacts are now stored on the dedicated\n"
                     "'kitty-specs' orphan branch managed via git worktree.\n"
@@ -514,7 +518,7 @@ class SpecBranchWorktreeMigration(BaseMigration):
             if status_result.stdout.strip():
                 _run_git(
                     [
-                        "commit", "-m",
+                        "commit", "--no-verify", "-m",
                         "chore: import planning artifacts from development branch\n\n"
                         "Migrated from tracked kitty-specs/ directory on the\n"
                         "development branch to this dedicated orphan branch.\n\n"
@@ -694,7 +698,8 @@ class SpecBranchWorktreeMigration(BaseMigration):
             # Re-add to git
             _run_git(["add", "kitty-specs/"], cwd=project_path, check=True)
             _run_git(
-                ["commit", "-m", "chore: restore kitty-specs/ after failed migration"],
+                ["commit", "--no-verify", "-m",
+                 "chore: restore kitty-specs/ after failed migration"],
                 cwd=project_path,
                 check=True,
             )

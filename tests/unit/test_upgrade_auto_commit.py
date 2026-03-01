@@ -229,11 +229,13 @@ def test_auto_commit_upgrade_changes_calls_safe_commit(
         files_to_commit: list[Path],
         commit_message: str,
         allow_empty: bool = False,
+        no_verify: bool = False,
     ) -> bool:
         captured["repo_path"] = repo_path
         captured["files_to_commit"] = files_to_commit
         captured["commit_message"] = commit_message
         captured["allow_empty"] = allow_empty
+        captured["no_verify"] = no_verify
         return True
 
     monkeypatch.setattr(upgrade_cmd, "safe_commit", _fake_safe_commit)
@@ -378,7 +380,7 @@ def test_upgrade_no_migrations_json_includes_auto_commit_fields(
     monkeypatch.setattr(
         upgrade_cmd,
         "safe_commit",
-        lambda repo_path, files_to_commit, commit_message, allow_empty=False: True,
+        lambda repo_path, files_to_commit, commit_message, allow_empty=False, no_verify=False: True,
     )
 
     # Capture console output
@@ -508,7 +510,7 @@ def test_upgrade_no_migrations_rich_output_shows_auto_commit(
     monkeypatch.setattr(
         upgrade_cmd,
         "safe_commit",
-        lambda repo_path, files_to_commit, commit_message, allow_empty=False: True,
+        lambda repo_path, files_to_commit, commit_message, allow_empty=False, no_verify=False: True,
     )
 
     captured_output: list[str] = []
@@ -553,7 +555,7 @@ def test_upgrade_no_migrations_safe_commit_failure_shows_warning(
     monkeypatch.setattr(
         upgrade_cmd,
         "safe_commit",
-        lambda repo_path, files_to_commit, commit_message, allow_empty=False: False,
+        lambda repo_path, files_to_commit, commit_message, allow_empty=False, no_verify=False: False,
     )
 
     captured_output: list[str] = []

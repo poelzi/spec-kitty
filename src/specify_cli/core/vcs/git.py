@@ -915,6 +915,7 @@ class GitVCS:
         workspace_path: Path,
         message: str,
         paths: list[Path] | None = None,
+        no_verify: bool = False,
     ) -> ChangeInfo | None:
         """
         Create a commit with current changes.
@@ -923,6 +924,7 @@ class GitVCS:
             workspace_path: Workspace to commit in
             message: Commit message
             paths: Specific paths to commit (None = all)
+            no_verify: If True, pass --no-verify to skip pre-commit hooks
 
         Returns:
             ChangeInfo for new commit, None if nothing to commit
@@ -955,8 +957,12 @@ class GitVCS:
                 return None
 
             # Commit
+            commit_cmd = ["git", "-C", str(workspace_path), "commit"]
+            if no_verify:
+                commit_cmd.append("--no-verify")
+            commit_cmd.extend(["-m", message])
             commit_result = subprocess.run(
-                ["git", "-C", str(workspace_path), "commit", "-m", message],
+                commit_cmd,
                 capture_output=True,
                 text=True,
                 encoding="utf-8",

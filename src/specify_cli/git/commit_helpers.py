@@ -15,6 +15,7 @@ def safe_commit(
     files_to_commit: list[Path],
     commit_message: str,
     allow_empty: bool = False,
+    no_verify: bool = False,
 ) -> bool:
     """Commit only specified files, preserving existing staging area.
 
@@ -32,6 +33,7 @@ def safe_commit(
         files_to_commit: List of file paths to commit (absolute or relative to repo_path)
         commit_message: The commit message to use
         allow_empty: If True, return success even if there's nothing to commit
+        no_verify: If True, pass --no-verify to skip pre-commit hooks
 
     Returns:
         True if commit succeeded (or nothing to commit with allow_empty=True),
@@ -91,8 +93,12 @@ def safe_commit(
                 return False
 
         # Commit the staged files
+        commit_cmd = ["git", "commit"]
+        if no_verify:
+            commit_cmd.append("--no-verify")
+        commit_cmd.extend(["-m", commit_message])
         commit_result = subprocess.run(
-            ["git", "commit", "-m", commit_message],
+            commit_cmd,
             cwd=repo_path,
             capture_output=True,
             text=True,
