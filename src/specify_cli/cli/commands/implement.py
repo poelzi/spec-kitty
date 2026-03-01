@@ -1045,6 +1045,7 @@ def implement(
                 files_to_commit=files_to_commit,
                 commit_message=commit_msg,
                 allow_empty=True,  # OK if nothing changed
+                no_verify=True,
             )
 
             if commit_success:

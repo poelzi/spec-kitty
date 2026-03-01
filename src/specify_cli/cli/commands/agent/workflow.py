@@ -675,6 +675,7 @@ def implement(
                     files_to_commit=[actual_wp_path],
                     commit_message=f"chore: Start {normalized_wp_id} implementation [{agent}]",
                     allow_empty=True,  # OK if already in this state
+                    no_verify=True,
                 )
                 if not commit_success:
                     print(
@@ -1253,6 +1254,7 @@ def review(
                     files_to_commit=[actual_wp_path],
                     commit_message=f"chore: Start {normalized_wp_id} review [{agent}]",
                     allow_empty=True,  # OK if already in this state
+                    no_verify=True,
                 )
                 if not commit_success:
                     print(

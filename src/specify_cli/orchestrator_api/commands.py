@@ -209,6 +209,7 @@ def _write_wp_transition(
             f"to {to_api_lane}"
         ),
         allow_empty=True,
+        no_verify=True,
     )
 
 
@@ -710,6 +711,7 @@ def append_history(
         files_to_commit=[wp_file],
         commit_message=f"hist: append activity log entry for {feature}/{wp}",
         allow_empty=True,
+        no_verify=True,
     )
 
     _emit(
