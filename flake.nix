@@ -4,6 +4,10 @@
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-25.11";
     flake-utils.url = "github:numtide/flake-utils";
+    spec_kitty_orchestrator_src = {
+      url = "github:Priivacy-ai/spec-kitty-orchestrator";
+      flake = false;
+    };
   };
 
   outputs =
@@ -11,11 +15,17 @@
       self,
       nixpkgs,
       flake-utils,
+      spec_kitty_orchestrator_src,
     }:
     let
       # Extract version from pyproject.toml
       pyproject = builtins.fromTOML (builtins.readFile ./pyproject.toml);
       version = pyproject.project.version;
+
+      orchestratorPyproject = builtins.fromTOML (
+        builtins.readFile (spec_kitty_orchestrator_src + "/pyproject.toml")
+      );
+      orchestratorVersion = orchestratorPyproject.project.version;
 
       # Filter source to only include files needed for building and testing
       sourceFilter =
@@ -59,6 +69,12 @@
         ps.python-ulid
         ps.websockets
         ps.toml
+      ];
+
+      runtimeOrchestratorDeps = ps: [
+        ps.typer
+        ps.rich
+        ps.pydantic
       ];
 
       # Package builder function that can be used in overlay
@@ -388,15 +404,70 @@
             mainProgram = "spec-kitty";
           };
         };
+
+      mkSpecKittyOrchestrator =
+        {
+          pkgs,
+          python3Packages ? pkgs.python3Packages,
+        }:
+        python3Packages.buildPythonApplication rec {
+          pname = "spec-kitty-orchestrator";
+          version = orchestratorVersion;
+          format = "pyproject";
+
+          src = spec_kitty_orchestrator_src;
+
+          nativeBuildInputs = with python3Packages; [
+            hatchling
+          ];
+
+          propagatedBuildInputs = runtimeOrchestratorDeps python3Packages;
+
+          doCheck = false;
+
+          pythonImportsCheck = [
+            "spec_kitty_orchestrator"
+          ];
+
+          meta = with pkgs.lib; {
+            description = "External orchestrator for spec-kitty via orchestrator-api contract";
+            homepage = "https://github.com/Priivacy-ai/spec-kitty-orchestrator";
+            license = licenses.mit;
+            maintainers = [ ];
+            mainProgram = "spec-kitty-orchestrator";
+          };
+        };
     in
     {
       # Overlay for use in other flakes
-      overlays.default = final: prev: {
-        spec-kitty = mkSpecKitty {
-          pkgs = final;
-          python3Packages = final.python3Packages;
+      overlays.default =
+        final: prev:
+        let
+          specKittyCore = mkSpecKitty {
+            pkgs = final;
+            python3Packages = final.python3Packages;
+          };
+          specKittyOrchestrator = mkSpecKittyOrchestrator {
+            pkgs = final;
+            python3Packages = final.python3Packages;
+          };
+          specKitty = final.symlinkJoin {
+            name = "spec-kitty-with-orchestrator-${version}";
+            paths = [
+              specKittyCore
+              specKittyOrchestrator
+            ];
+            meta = (specKittyCore.meta or { }) // {
+              description = "Spec Kitty bundled with spec-kitty-orchestrator";
+              mainProgram = "spec-kitty";
+            };
+          };
+        in
+        {
+          spec-kitty = specKitty;
+          spec-kitty-core = specKittyCore;
+          spec-kitty-orchestrator = specKittyOrchestrator;
         };
-      };
 
       # Also export the overlay under a named attribute
       overlays.spec-kitty = self.overlays.default;
@@ -405,15 +476,32 @@
       system:
       let
         pkgs = nixpkgs.legacyPackages.${system};
-        spec-kitty = mkSpecKitty {
+        specKittyCore = mkSpecKitty {
           inherit pkgs;
           python3Packages = pkgs.python3Packages;
+        };
+        specKittyOrchestrator = mkSpecKittyOrchestrator {
+          inherit pkgs;
+          python3Packages = pkgs.python3Packages;
+        };
+        spec-kitty = pkgs.symlinkJoin {
+          name = "spec-kitty-with-orchestrator-${version}";
+          paths = [
+            specKittyCore
+            specKittyOrchestrator
+          ];
+          meta = (specKittyCore.meta or { }) // {
+            description = "Spec Kitty bundled with spec-kitty-orchestrator";
+            mainProgram = "spec-kitty";
+          };
         };
       in
       {
         packages = {
           default = spec-kitty;
           spec-kitty = spec-kitty;
+          spec-kitty-core = specKittyCore;
+          spec-kitty-orchestrator = specKittyOrchestrator;
         };
 
         devShells.default =
@@ -434,6 +522,7 @@
             packages = [
               pythonEnv
               pkgs.git
+              spec-kitty
             ];
 
             shellHook = ''
@@ -447,6 +536,10 @@
         apps.default = {
           type = "app";
           program = "${spec-kitty}/bin/spec-kitty";
+        };
+        apps.spec-kitty-orchestrator = {
+          type = "app";
+          program = "${specKittyOrchestrator}/bin/spec-kitty-orchestrator";
         };
       }
     );

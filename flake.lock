@@ -37,7 +37,24 @@
     "root": {
       "inputs": {
         "flake-utils": "flake-utils",
-        "nixpkgs": "nixpkgs"
+        "nixpkgs": "nixpkgs",
+        "spec_kitty_orchestrator_src": "spec_kitty_orchestrator_src"
+      }
+    },
+    "spec_kitty_orchestrator_src": {
+      "flake": false,
+      "locked": {
+        "lastModified": 1772123113,
+        "narHash": "sha256-44R6q86ebmycs09T8EWhxD8mEC5jzy2PE5NIvzzcJGQ=",
+        "owner": "Priivacy-ai",
+        "repo": "spec-kitty-orchestrator",
+        "rev": "131fcf884a3840bb0292f5864a274c65029fdd04",
+        "type": "github"
+      },
+      "original": {
+        "owner": "Priivacy-ai",
+        "repo": "spec-kitty-orchestrator",
+        "type": "github"
       }
     },
     "systems": {
