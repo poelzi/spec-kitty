@@ -39,18 +39,18 @@ Examples of valid deliverables paths:
 Run this command to get started:
 
 ```bash
-spec-kitty agent workflow implement $ARGUMENTS --agent <your-name>
+spec-kitty agent workflow implement $ARGUMENTS --agent __AGENT__
 ```
 
 <details><summary>PowerShell equivalent</summary>
 
 ```powershell
-spec-kitty agent workflow implement $ARGUMENTS --agent <your-name>
+spec-kitty agent workflow implement $ARGUMENTS --agent __AGENT__
 ```
 
 </details>
 
-**CRITICAL**: You MUST provide `--agent <your-name>` to track who is implementing!
+**CRITICAL**: Use the prefilled `--agent __AGENT__` value to track who is implementing!
 
 ### Step 1: Navigate to Your Worktree
 

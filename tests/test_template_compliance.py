@@ -339,3 +339,32 @@ def test_implement_all_template_uses_explicit_feature_flag():
     assert "spec-kitty agent tasks status --json --feature <feature-slug>" in content, (
         "implement-all must pass --feature when checking task status"
     )
+
+
+def test_templates_do_not_use_literal_agent_name_placeholders():
+    """Workflow command templates must not use shell-invalid `<your-name>` placeholders.
+
+    Generated agent prompts should contain concrete names (via `__AGENT__` replacement),
+    not angle-bracket placeholders that shells parse as redirection.
+    """
+    templates = find_mission_templates()
+    violations = []
+
+    for template_path in templates:
+        content = template_path.read_text(encoding="utf-8")
+        for line_num, line in enumerate(content.splitlines(), 1):
+            if "<your-name>" in line:
+                violations.append(
+                    {
+                        "file": template_path.relative_to(template_path.parent.parent.parent),
+                        "line": line_num,
+                        "content": line.strip(),
+                    }
+                )
+
+    if violations:
+        msg = "\n\nTemplates containing literal '<your-name>' placeholders:\n"
+        msg += "Use __AGENT__ so generated prompts contain concrete agent names.\n"
+        for item in violations:
+            msg += f"\n{item['file']}:{item['line']}\n  {item['content']}\n"
+        pytest.fail(msg)

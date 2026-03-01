@@ -9,7 +9,7 @@ description: Perform structured code review and kanban transitions for completed
 Run this command to get the work package prompt and review instructions:
 
 ```bash
-spec-kitty agent workflow review $ARGUMENTS --agent <your-name>
+spec-kitty agent workflow review $ARGUMENTS --agent __AGENT__
 ```
 
 Optional: if you explicitly want to merge approved WP branches into upstream instead of the feature landing branch, add:
@@ -20,7 +20,7 @@ Optional: if you explicitly want to merge approved WP branches into upstream ins
 
 Default merge target is the feature's local landing branch (`--merge-target landing`).
 
-**CRITICAL**: You MUST provide `--agent <your-name>` to track who is reviewing!
+**CRITICAL**: Use the prefilled `--agent __AGENT__` value to track who is reviewing!
 
 If no WP ID is provided, it will automatically find the first work package with `lane: "for_review"` and move it to "doing" for you.
 

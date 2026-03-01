@@ -24,18 +24,18 @@ description: Create an isolated workspace (worktree) for implementing a specific
 Run this command to get the work package prompt and implementation instructions:
 
 ```bash
-spec-kitty agent workflow implement $ARGUMENTS --agent <your-name>
+spec-kitty agent workflow implement $ARGUMENTS --agent __AGENT__
 ```
 
 <details><summary>PowerShell equivalent</summary>
 
 ```powershell
-spec-kitty agent workflow implement $ARGUMENTS --agent <your-name>
+spec-kitty agent workflow implement $ARGUMENTS --agent __AGENT__
 ```
 
 </details>
 
-**CRITICAL**: You MUST provide `--agent <your-name>` to track who is implementing!
+**CRITICAL**: Use the prefilled `--agent __AGENT__` value to track who is implementing!
 
 If no WP ID is provided, it will automatically find the first work package with `lane: "planned"` and move it to "doing" for you.
 
