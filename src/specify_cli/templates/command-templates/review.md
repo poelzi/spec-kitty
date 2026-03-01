@@ -31,6 +31,8 @@ Before proceeding with review, verify you are in the correct working directory b
 
 This is intentional - worktrees provide isolation for parallel feature development.
 
+**Note**: `kitty-specs/` is a git worktree on an orphan branch. Commits to spec files will NOT appear in `git log` on main. Use `git -C kitty-specs log` to see spec history. Do NOT manually `git commit` inside `kitty-specs/` — the spec-kitty CLI handles this. See AGENTS.md section 5a for details.
+
 ## Outline
 
 1. Run `{SCRIPT}` from repo root; capture `FEATURE_DIR`, `AVAILABLE_DOCS`, and `tasks.md` path.

@@ -7,6 +7,8 @@ description: Review documentation work packages for Divio compliance and quality
 **Phase**: Validate
 **Purpose**: Review documentation for Divio compliance, accessibility, completeness, and quality.
 
+**Note**: `kitty-specs/` is a git worktree on an orphan branch. Commits to spec files will NOT appear in `git log` on main. Use `git -C kitty-specs log` to see spec history. Do NOT manually `git commit` inside `kitty-specs/` — the spec-kitty CLI handles this. See AGENTS.md section 5a for details.
+
 ## User Input
 
 ```text

@@ -13,6 +13,8 @@ description: Implement a research work package by conducting research and docume
 | **Sprint Planning** | `kitty-specs/{{feature_slug}}/research/` | Main repo | Evidence/sources for planning THIS sprint |
 | **Research Deliverables** | `{{deliverables_path}}` | Worktree | Actual research outputs (your work product) |
 
+**Note**: `kitty-specs/` is a git worktree on an orphan branch. Commits to spec files will NOT appear in `git log` on main. Use `git -C kitty-specs log` to see spec history. Do NOT manually `git commit` inside `kitty-specs/` — the spec-kitty CLI handles this. See AGENTS.md section 5a for details.
+
 ### Where to Put Your Research
 
 **Your research findings go in:** `{{deliverables_path}}`
