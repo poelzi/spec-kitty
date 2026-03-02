@@ -22,7 +22,7 @@ cd /path/to/project/root  # Your planning repository
 
 **Worktrees are created later** during `/spec-kitty.implement`, not during planning.
 
-**Note**: `kitty-specs/` is a git worktree on an orphan branch. Commits to spec files will NOT appear in `git log` on main. Use `git -C kitty-specs log` to see spec history. See AGENTS.md section 5a for details.
+**Note**: `kitty-specs/` is a git worktree on an orphan branch. Commits to spec files will NOT appear in the root repository `git log`. Use `git -C kitty-specs log` to see spec history. See AGENTS.md section 5a for details.
 
 ## User Input
 

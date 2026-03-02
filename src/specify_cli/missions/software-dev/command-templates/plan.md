@@ -38,7 +38,7 @@ This command runs in the **planning repository**, not in a worktree.
 - Planning artifacts live in `kitty-specs/###-feature/`
 - The plan template is committed by the spec-kitty CLI (handles spec storage transparently)
 
-**Note**: `kitty-specs/` is a git worktree on an orphan branch. Commits to spec files will NOT appear in `git log` on main. Use `git -C kitty-specs log` to see spec history. See AGENTS.md section 5a for details.
+**Note**: `kitty-specs/` is a git worktree on an orphan branch. Commits to spec files will NOT appear in the root repository `git log`. Use `git -C kitty-specs log` to see spec history. See AGENTS.md section 5a for details.
 
 **Path reference rule:** When you mention directories or files, provide either the absolute path or a path relative to the project root (for example, `kitty-specs/<feature>/tasks/`). Never refer to a folder by name alone.
 
