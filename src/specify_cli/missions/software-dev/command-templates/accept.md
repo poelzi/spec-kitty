@@ -12,7 +12,7 @@ description: Validate feature readiness and guide final acceptance steps.
 **IMPORTANT**: Accept runs from the main repository root, NOT from a WP worktree.
 
 ```bash
-# If you're in a worktree, return to main first:
+# If you're in a worktree, return to the primary repository first:
 cd $(git rev-parse --show-toplevel)
 
 # Then run accept:

@@ -200,18 +200,18 @@ echo 'S001,"Smith (2024). AI Tools.",https://example.com,2025-01-25,high,reviewe
 |--------|--------------|----------|
 | **Primary output** | Source code in worktree | Research docs in `deliverables_path` |
 | **Commit location** | Worktree branch | Worktree branch (same!) |
-| **Merges to main** | Yes, via spec-kitty merge | Yes, via spec-kitty merge |
-| **Planning artifacts** | N/A | `kitty-specs/.../research/` (in main) |
+| **Merged into landing branch** | Yes, via spec-kitty merge | Yes, via spec-kitty merge |
+| **Planning artifacts** | N/A | `kitty-specs/.../research/` (in primary repo) |
 
 ### Why This Changed
 
 Previously, research artifacts went in `kitty-specs/` which is sparse-excluded from worktrees. This meant:
-- Research outputs never got merged to main
+- Research outputs never got merged into the landing/upstream flow
 - WPs were marked "done" but work was stuck in worktrees
 
 Now, research deliverables go in `{{deliverables_path}}` which:
 - EXISTS in worktrees (not sparse-excluded)
-- MERGES to main when WPs complete
+- MERGES into the landing branch when WPs complete
 - Works just like code in software-dev missions
 
 ---

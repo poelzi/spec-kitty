@@ -5,7 +5,7 @@ description: Merge WP branches into the feature's landing branch and clean up wo
 # /spec-kitty.merge - Merge WP Branches to Landing Branch
 
 **Version**: 0.15.0+
-**Purpose**: Merge ALL completed work packages into the feature's landing branch. The landing branch is preserved for upstream PR. Use `spec-kitty integrate` to merge landing branch into main.
+**Purpose**: Merge ALL completed work packages into the feature's landing branch. The landing branch is preserved for upstream PR. Use `spec-kitty integrate` to merge landing branch into upstream.
 
 ## CRITICAL: Workspace-per-WP Model (0.11.0)
 
@@ -107,7 +107,7 @@ spec-kitty merge --feature 001-cli-hello-world
 3. **Determines** merge order based on WP dependencies (workspace-per-WP)
 4. **Forecasts** conflicts during `--dry-run` and flags auto-resolvable status files
 5. **Verifies** working directory is clean (legacy single-worktree)
-6. **Switches** to the target branch (default: `main`)
+6. **Switches** to the target branch (default: feature landing branch)
 7. **Updates** the target branch (`git pull --ff-only`)
 8. **Merges** the feature using your chosen strategy
 9. **Auto-resolves** status file conflicts after each WP merge
@@ -176,7 +176,7 @@ spec-kitty merge --strategy merge
 ```
 ✅ Preserves full commit history
 ✅ Clear feature boundaries in git log
-❌ More commits in main branch
+❌ More commits on the target branch
 
 ### `squash`
 Squashes all feature commits into a single commit.
@@ -206,7 +206,7 @@ spec-kitty merge --strategy rebase
 | `--push` | Push to origin after merge | no push |
 | `--target` | Target branch to merge into | `main` |
 | `--dry-run` | Show what would be done without executing | off |
-| `--feature` | Feature slug when merging from main branch | none |
+| `--feature` | Feature slug when merging from the primary repo | none |
 | `--resume` | Resume an interrupted merge | off |
 
 ## Worktree Strategy
@@ -232,7 +232,7 @@ my-project/                              # Main repo (main branch)
 **Merge behavior for workspace-per-WP**:
 - Run `spec-kitty merge` from **any** WP worktree for the feature
 - The command automatically detects all WP branches (WP01, WP02, WP03, etc.)
-- Merges each WP branch into main in sequence
+- Merges each WP branch into the selected target branch in sequence
 - Cleans up all WP worktrees and branches
 
 ### Legacy Pattern (0.10.x)
@@ -276,7 +276,7 @@ my-project/                    # Main repo (main branch)
 
 ## Error Handling
 
-### "Already on main branch"
+### "Already on upstream branch"
 You're not on a feature branch. Switch to your feature branch first:
 ```bash
 cd .worktrees/<feature-slug>
@@ -293,10 +293,10 @@ git commit -m "Final changes"
 git stash
 ```
 
-### "Could not fast-forward main"
-Your main branch is behind origin:
+### "Could not fast-forward target branch"
+Your target branch is behind origin:
 ```bash
-git checkout main
+git checkout <target-branch>
 git pull
 git checkout <feature-branch>
 spec-kitty merge
@@ -347,7 +347,7 @@ spec-kitty merge --dry-run
 
 ## After Merging
 
-After a successful merge, you're back on the main branch with:
+After a successful merge, you are back on the primary repo checkout with:
 - ✅ Feature code integrated
 - ✅ Worktree removed (if it existed)
 - ✅ Feature branch deleted (unless `--keep-branch`)
@@ -375,7 +375,7 @@ Or combine conceptually:
 ```
 
 The `/spec-kitty.accept` command **verifies** your feature is complete.
-The `/spec-kitty.merge` command **integrates** your feature into main.
+The `/spec-kitty.merge` command **integrates** WP branches into the feature landing branch.
 
 Together they complete the workflow:
 ```
