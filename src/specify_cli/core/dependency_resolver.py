@@ -51,7 +51,7 @@ class DependencyStatus:
             Recommendation string (user/agent guidance)
         """
         if not self.dependencies:
-            return "No dependencies - implement directly from main"
+            return "No dependencies - implement directly from the landing branch"
 
         if not self.all_done:
             not_done = [dep for dep, lane in self.lanes.items() if lane != "done"]

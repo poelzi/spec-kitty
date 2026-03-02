@@ -263,6 +263,8 @@ class TestPerformAcceptanceParity:
         expected_summary_keys = {
             "feature",
             "branch",
+            "landing_branch",
+            "upstream_branch",
             "repo_root",
             "feature_dir",
             "tasks_dir",
@@ -314,6 +316,8 @@ class TestPerformAcceptanceParity:
             feature_dir=tmp_path / "kitty-specs" / feature_slug,
             tasks_dir=tmp_path / "kitty-specs" / feature_slug / "tasks",
             branch="main",
+            landing_branch=feature_slug,
+            upstream_branch="develop",
             worktree_root=tmp_path,
             primary_repo_root=tmp_path,
             lanes={"planned": [], "doing": [], "for_review": [], "done": ["WP01"]},
@@ -335,6 +339,9 @@ class TestPerformAcceptanceParity:
         assert any(
             f"git merge {feature_slug}" in instruction
             for instruction in result.instructions
+        )
+        assert any(
+            "git checkout develop" in instruction for instruction in result.instructions
         )
         # Cleanup must never suggest deleting main
         assert all(

@@ -117,6 +117,8 @@ class AcceptanceSummary:
     feature_dir: Path
     tasks_dir: Path
     branch: Optional[str]
+    landing_branch: str
+    upstream_branch: str
     worktree_root: Path
     primary_repo_root: Path
     lanes: Dict[str, List[str]]
@@ -173,6 +175,8 @@ class AcceptanceSummary:
         return {
             "feature": self.feature,
             "branch": self.branch,
+            "landing_branch": self.landing_branch,
+            "upstream_branch": self.upstream_branch,
             "repo_root": str(self.repo_root),
             "feature_dir": str(self.feature_dir),
             "tasks_dir": str(self.tasks_dir),
@@ -352,6 +356,31 @@ def _missing_artifacts(feature_dir: Path) -> Tuple[List[str], List[str]]:
     return missing_required, missing_optional
 
 
+def _resolve_primary_branch(repo_root: Path) -> str:
+    """Resolve the repository's primary branch with safe fallbacks."""
+    for candidate in ("main", "master"):
+        try:
+            result = run_git(
+                ["rev-parse", "--verify", candidate], cwd=repo_root, check=False
+            )
+            if result.returncode == 0:
+                return candidate
+        except TaskCliError:
+            continue
+
+    try:
+        current = (
+            run_git(["rev-parse", "--abbrev-ref", "HEAD"], cwd=repo_root, check=False)
+            .stdout.strip()
+        )
+        if current and current != "HEAD":
+            return current
+    except TaskCliError:
+        pass
+
+    return "main"
+
+
 # ---------------------------------------------------------------------------
 # Public API
 # ---------------------------------------------------------------------------
@@ -407,7 +436,7 @@ def collect_feature_summary(
     except TaskCliError:
         worktree_root = repo_root
 
-    # Resolve primary (main) repo root
+    # Resolve primary repository root
     try:
         git_common_dir = Path(
             run_git(["rev-parse", "--git-common-dir"], cwd=repo_root, check=True)
@@ -509,12 +538,37 @@ def collect_feature_summary(
             "Optional artifacts missing: " + ", ".join(missing_optional)
         )
 
+    meta_path = feature_dir / "meta.json"
+    meta: Dict[str, object] = {}
+    if meta_path.exists():
+        try:
+            meta = json.loads(_read_text_strict(meta_path))
+        except (AcceptanceError, json.JSONDecodeError):
+            meta = {}
+
+    primary_branch = _resolve_primary_branch(repo_root)
+    configured_landing = str(meta.get("target_branch") or "").strip()
+    configured_upstream = str(meta.get("upstream_branch") or "").strip()
+
+    landing_branch = configured_landing or feature
+    upstream_branch = configured_upstream
+
+    if not upstream_branch:
+        # Legacy metadata can have target_branch as the upstream branch.
+        if configured_landing and configured_landing != feature:
+            upstream_branch = configured_landing
+            landing_branch = feature
+        else:
+            upstream_branch = primary_branch
+
     return AcceptanceSummary(
         feature=feature,
         repo_root=repo_root,
         feature_dir=feature_dir,
         tasks_dir=tasks_dir,
         branch=branch,
+        landing_branch=landing_branch,
+        upstream_branch=upstream_branch,
         worktree_root=worktree_root,
         primary_repo_root=primary_repo_root,
         lanes=lanes,
@@ -556,14 +610,14 @@ def choose_mode(preference: Optional[str], repo_root: Path) -> AcceptanceMode:
 def _resolve_feature_branch_name(summary: AcceptanceSummary) -> str:
     """Resolve the branch name to use in merge/cleanup guidance.
 
-    Acceptance may be executed from the target branch (e.g., main). In that case,
-    instructions must still refer to the feature branch instead of suggesting
-    deletion of the target branch.
+    Acceptance may be executed from the upstream branch. In that case,
+    instructions must still refer to the landing branch instead of suggesting
+    operations against the upstream branch itself.
     """
     branch = (summary.branch or "").strip()
-    if branch and branch not in {"HEAD", "main", "master"}:
+    if branch and branch not in {"HEAD", summary.upstream_branch}:
         return branch
-    return summary.feature
+    return summary.landing_branch
 
 
 def perform_acceptance(
@@ -687,12 +741,14 @@ def perform_acceptance(
     cleanup_instructions: List[str] = []
 
     feature_branch = _resolve_feature_branch_name(summary)
+    landing_branch = summary.landing_branch
+    upstream_branch = summary.upstream_branch
     if mode == "pr":
         instructions.extend(
             [
                 f"Review the acceptance commit on branch `{feature_branch}`.",
                 "Merge WP branches into the landing branch: `spec-kitty merge`",
-                f"Push the landing branch: `git push origin {feature_branch}`",
+                f"Push the landing branch: `git push origin {landing_branch}`",
                 "Open a pull request from the landing branch referencing spec/plan/tasks artifacts.",
                 "Include acceptance summary and test evidence in the PR description.",
             ]
@@ -701,8 +757,8 @@ def perform_acceptance(
         instructions.extend(
             [
                 "Merge WP branches into the landing branch: `spec-kitty merge`",
-                "Integrate landing branch into main: `spec-kitty integrate`",
-                f"Or manually: `git checkout main && git merge {feature_branch}`",
+                f"Integrate landing branch into upstream (`{upstream_branch}`): `spec-kitty integrate`",
+                f"Or manually: `git checkout {upstream_branch} && git merge {landing_branch}`",
             ]
         )
     else:  # checklist
@@ -715,7 +771,7 @@ def perform_acceptance(
             f"After merging, remove the worktree: `git worktree remove {summary.worktree_root}`"
         )
     cleanup_instructions.append(
-        f"Landing branch '{feature_branch}' is preserved for upstream PR and future changes."
+        f"Landing branch '{landing_branch}' is preserved for upstream PR and future changes."
     )
 
     notes: List[str] = []

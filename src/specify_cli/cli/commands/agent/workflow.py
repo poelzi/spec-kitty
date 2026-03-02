@@ -982,7 +982,7 @@ def _resolve_review_context(
     Strategy:
     1. Get actual branch name from the worktree
     2. Extract WP dependencies from frontmatter to try dependency branches
-    3. Also try common base branches (main, 2.x, master, develop)
+    3. Also try feature landing/upstream branches plus common fallbacks
     4. Pick the candidate with fewest commits ahead (closest ancestor)
     """
     ctx: dict = {
@@ -1021,8 +1021,26 @@ def _resolve_review_context(
             for dep_id in dep_ids:
                 candidates.append(f"{feature_slug}-{dep_id}")
 
-    # Common base branches
-    candidates.extend(["main", "2.x", "master", "develop"])
+    # Prefer feature branch routing metadata first.
+    try:
+        candidates.append(get_feature_target_branch(repo_root, feature_slug))
+    except Exception:
+        pass
+
+    try:
+        candidates.append(get_feature_upstream_branch(repo_root, feature_slug))
+    except Exception:
+        pass
+
+    # Fallback branch candidates for legacy repositories.
+    try:
+        candidates.append(_resolve_primary_branch(repo_root))
+    except typer.Exit:
+        pass
+    candidates.extend(["2.x", "develop"])
+
+    # Keep order, drop duplicates and empties.
+    candidates = [c for c in dict.fromkeys(candidates) if c]
 
     # Find closest ancestor (fewest commits ahead = most specific base)
     best_base = None

@@ -268,7 +268,7 @@ def test_merge_skips_pull_when_target_has_no_tracking(monkeypatch, tmp_path: Pat
     result = runner.invoke(cli_app, ["merge", "--keep-worktree", "--keep-branch"])
     assert result.exit_code == 0
     assert ["git", "pull", "--ff-only"] not in calls
-    assert "Skipping pull (main branch not tracking remote)" in result.stdout
+    assert "Skipping pull (target branch not tracking remote)" in result.stdout
 
 
 def test_merge_accepts_positional_feature_slug(monkeypatch, tmp_path: Path) -> None:

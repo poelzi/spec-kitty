@@ -221,7 +221,7 @@ def execute_merge(
             console.print("[dim]Skipping pull (no remote)[/dim]")
         elif not has_tracking_branch(repo_root):
             tracker.skip("pull", "no upstream tracking")
-            console.print("[dim]Skipping pull (main branch not tracking remote)[/dim]")
+            console.print("[dim]Skipping pull (target branch not tracking remote)[/dim]")
         else:
             run_command(["git", "pull", "--ff-only"], cwd=merge_root)
             tracker.complete("pull")
@@ -387,7 +387,7 @@ def execute_merge(
     if target_branch == feature_slug:
         console.print(
             f"[dim]Landing branch '{target_branch}' preserved "
-            f"(use 'spec-kitty integrate' to merge into main)[/dim]"
+            f"(use 'spec-kitty integrate' to merge into upstream)[/dim]"
         )
 
     # Clear state on successful completion
@@ -502,7 +502,7 @@ def execute_legacy_merge(
             console.print("[dim]Skipping pull (no remote)[/dim]")
         elif not has_tracking_branch(merge_root):
             tracker.skip("pull", "no upstream tracking")
-            console.print("[dim]Skipping pull (main branch not tracking remote)[/dim]")
+            console.print("[dim]Skipping pull (target branch not tracking remote)[/dim]")
         else:
             run_command(["git", "pull", "--ff-only"], cwd=merge_root)
             tracker.complete("pull")
@@ -579,7 +579,7 @@ def execute_legacy_merge(
             tracker.skip("branch", f"landing branch '{current_branch}' preserved")
             console.print(
                 f"[dim]Landing branch '{current_branch}' preserved "
-                f"(use 'spec-kitty integrate' to merge into main)[/dim]"
+                f"(use 'spec-kitty integrate' to merge into upstream)[/dim]"
             )
         else:
             tracker.start("branch")

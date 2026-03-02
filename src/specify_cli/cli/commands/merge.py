@@ -373,7 +373,7 @@ def merge_workspace_per_wp(
             console.print("[dim]Skipping pull (no remote)[/dim]")
         elif not has_tracking_branch(merge_root):
             tracker.skip("pull", "no upstream tracking")
-            console.print("[dim]Skipping pull (main branch not tracking remote)[/dim]")
+            console.print("[dim]Skipping pull (target branch not tracking remote)[/dim]")
         else:
             run_command(["git", "pull", "--ff-only"], cwd=merge_root)
             tracker.complete("pull")
@@ -502,7 +502,7 @@ def merge_workspace_per_wp(
     # Landing branch is preserved for upstream PR
     if target_branch == feature_slug:
         console.print(
-            f"[dim]Landing branch '{target_branch}' preserved (use 'spec-kitty integrate' to merge into main)[/dim]"
+            f"[dim]Landing branch '{target_branch}' preserved (use 'spec-kitty integrate' to merge into upstream)[/dim]"
         )
 
 
@@ -526,7 +526,7 @@ def merge(
     target_branch: str = typer.Option(
         None,
         "--target",
-        help="Target branch to merge into (default: feature landing branch or main)",
+        help="Target branch to merge into (default: feature landing branch or configured upstream)",
     ),
     dry_run: bool = typer.Option(
         False, "--dry-run", help="Show what would be done without executing"
@@ -545,7 +545,7 @@ def merge(
     (010-feature-WP01, 010-feature-WP02, etc.) into the feature's landing
     branch (010-feature-name). The landing branch is never deleted.
 
-    To merge the landing branch into main for local integration, use:
+    To merge the landing branch into the configured upstream branch for local integration, use:
         spec-kitty integrate
 
     For legacy features (0.10.x), merges single feature branch.
@@ -920,7 +920,7 @@ def merge(
             console.print("[dim]Skipping pull (no remote)[/dim]")
         elif not has_tracking_branch(merge_root):
             tracker.skip("pull", "no upstream tracking")
-            console.print("[dim]Skipping pull (main branch not tracking remote)[/dim]")
+            console.print("[dim]Skipping pull (target branch not tracking remote)[/dim]")
         else:
             run_command(["git", "pull", "--ff-only"], cwd=merge_root)
             tracker.complete("pull")
@@ -999,7 +999,7 @@ def merge(
         if _is_landing:
             tracker.skip("branch", f"landing branch '{current_branch}' preserved")
             console.print(
-                f"[dim]Landing branch '{current_branch}' preserved (use 'spec-kitty integrate' to merge into main)[/dim]"
+                f"[dim]Landing branch '{current_branch}' preserved (use 'spec-kitty integrate' to merge into upstream)[/dim]"
             )
         else:
             tracker.start("branch")

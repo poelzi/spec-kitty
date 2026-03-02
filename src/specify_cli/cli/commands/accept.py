@@ -91,7 +91,7 @@ def accept(
     no_commit: bool = typer.Option(False, "--no-commit", help="Skip auto-commit; report only"),
     allow_fail: bool = typer.Option(False, "--allow-fail", help="Return checklist even when issues remain"),
 ) -> None:
-    """Validate feature readiness before merging to main."""
+    """Validate feature readiness before final landing/upstream integration."""
 
     if not json_output:
         show_banner()
