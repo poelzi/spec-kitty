@@ -83,6 +83,25 @@ def _resolve_primary_branch(repo_root: Path) -> str:
         raise typer.Exit(1)
 
 
+def _resolve_git_repo_root_for_path(file_path: Path, fallback_repo_root: Path) -> Path:
+    """Resolve the git top-level that contains ``file_path``.
+
+    This is required for `kitty-specs/` orphan-branch worktrees where the
+    work package file lives in a different git repository than the main repo.
+    """
+    probe_dir = file_path if file_path.is_dir() else file_path.parent
+    result = subprocess.run(
+        ["git", "rev-parse", "--show-toplevel"],
+        cwd=probe_dir,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if result.returncode == 0:
+        return Path(result.stdout.strip()).resolve()
+    return fallback_repo_root
+
+
 def _ensure_target_branch_checked_out(
     repo_root: Path, feature_slug: str
 ) -> tuple[Path, str]:
@@ -668,10 +687,11 @@ def implement(
 
             # Auto-commit to target branch when git is available.
             # Some tests/fixtures intentionally run without git.
-            if _is_git_repo(main_repo_root):
+            status_repo_root = _resolve_git_repo_root_for_path(wp.path, main_repo_root)
+            if _is_git_repo(status_repo_root):
                 actual_wp_path = wp.path.resolve()
                 commit_success = safe_commit(
-                    repo_path=main_repo_root,
+                    repo_path=status_repo_root,
                     files_to_commit=[actual_wp_path],
                     commit_message=f"chore: Start {normalized_wp_id} implementation [{agent}]",
                     allow_empty=True,  # OK if already in this state
@@ -1247,10 +1267,11 @@ def review(
 
             # Auto-commit to target branch when git is available.
             # Some tests/fixtures intentionally run without git.
-            if _is_git_repo(main_repo_root):
+            status_repo_root = _resolve_git_repo_root_for_path(wp.path, main_repo_root)
+            if _is_git_repo(status_repo_root):
                 actual_wp_path = wp.path.resolve()
                 commit_success = safe_commit(
-                    repo_path=main_repo_root,
+                    repo_path=status_repo_root,
                     files_to_commit=[actual_wp_path],
                     commit_message=f"chore: Start {normalized_wp_id} review [{agent}]",
                     allow_empty=True,  # OK if already in this state

@@ -15,6 +15,7 @@ import typer
 
 from specify_cli.cli.commands.agent.workflow import (
     _find_first_planned_wp,
+    _resolve_git_repo_root_for_path,
     implement as agent_implement,
     review as agent_review,
 )
@@ -547,6 +548,43 @@ class TestAgentWorkflowImplement:
         captured = capsys.readouterr()
         assert "Failed to commit workflow status update for WP01" in captured.out
         assert "✓ Claimed WP01 for review" not in captured.out
+
+
+class TestWorkflowStatusCommitRepoResolution:
+    """Regression tests for workflow status commit repo selection."""
+
+    def test_resolve_git_repo_root_for_path_uses_containing_repo(
+        self, tmp_path: Path
+    ):
+        """When git can resolve a top-level, use that repo root."""
+        fallback_repo = tmp_path / "fallback"
+        fallback_repo.mkdir()
+        wp_file = tmp_path / "kitty-specs" / "001-test-feature" / "tasks" / "WP01.md"
+        wp_file.parent.mkdir(parents=True)
+        wp_file.write_text("placeholder", encoding="utf-8")
+
+        with patch("subprocess.run") as mock_run:
+            mock_run.return_value = MagicMock(
+                returncode=0,
+                stdout=str(tmp_path / "kitty-specs") + "\n",
+            )
+            resolved = _resolve_git_repo_root_for_path(wp_file, fallback_repo)
+
+        assert resolved == (tmp_path / "kitty-specs").resolve()
+
+    def test_resolve_git_repo_root_for_path_falls_back_when_git_lookup_fails(
+        self, tmp_path: Path
+    ):
+        """When git lookup fails, keep the provided fallback repo root."""
+        fallback_repo = tmp_path / "fallback"
+        fallback_repo.mkdir()
+        wp_file = tmp_path / "missing" / "WP01.md"
+
+        with patch("subprocess.run") as mock_run:
+            mock_run.return_value = MagicMock(returncode=1, stdout="", stderr="fatal")
+            resolved = _resolve_git_repo_root_for_path(wp_file, fallback_repo)
+
+        assert resolved == fallback_repo
 
 
 class TestAgentFeatureAccept:
