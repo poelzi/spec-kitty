@@ -76,6 +76,12 @@ def _make_feature(tmp_path: Path, feature_slug: str = "099-test-feature") -> tup
     return repo_root, feature_dir
 
 
+def _write_agent_config(repo_root: Path, yaml_content: str) -> None:
+    config_dir = repo_root / ".kittify"
+    config_dir.mkdir(parents=True, exist_ok=True)
+    (config_dir / "config.yaml").write_text(yaml_content, encoding="utf-8")
+
+
 def _lane_of(path: Path) -> str:
     frontmatter, _ = read_frontmatter(path)
     return str(frontmatter.get("lane", "planned"))
@@ -138,6 +144,94 @@ class TestFeatureState:
         assert result.exit_code == 1
         payload = json.loads(result.output)
         assert payload["error_code"] == "FEATURE_NOT_FOUND"
+
+
+class TestAgentPreferences:
+    def test_returns_model_aware_preferences(self, tmp_path: Path) -> None:
+        repo_root = tmp_path / "repo"
+        repo_root.mkdir()
+        _write_agent_config(
+            repo_root,
+            "agents:\n"
+            "  available:\n"
+            "    - opencode\n"
+            "    - claude\n"
+            "  selection:\n"
+            "    preferred_implementer:\n"
+            "      tool: opencode\n"
+            "      model: gpt-5-coder\n"
+            "    preferred_reviewer: opencode@gpt-5-review\n",
+        )
+
+        with patch(
+            "specify_cli.orchestrator_api.commands._get_main_repo_root",
+            return_value=repo_root,
+        ):
+            result = runner.invoke(app, ["agent-preferences"])
+
+        assert result.exit_code == 0, result.output
+        payload = json.loads(result.output)
+        data = payload["data"]
+
+        assert data["available"] == ["opencode", "claude"]
+        assert data["preferred_implementer"] == {
+            "tool": "opencode",
+            "model": "gpt-5-coder",
+        }
+        assert data["preferred_reviewer"] == {
+            "tool": "opencode",
+            "model": "gpt-5-review",
+        }
+        assert data["implementer_agent"] == "opencode"
+        assert data["reviewer_agent"] == "opencode"
+
+    def test_returns_null_preferences_when_selection_missing(self, tmp_path: Path) -> None:
+        repo_root = tmp_path / "repo"
+        repo_root.mkdir()
+        _write_agent_config(
+            repo_root,
+            "agents:\n"
+            "  available:\n"
+            "    - claude\n",
+        )
+
+        with patch(
+            "specify_cli.orchestrator_api.commands._get_main_repo_root",
+            return_value=repo_root,
+        ):
+            result = runner.invoke(app, ["agent-preferences"])
+
+        assert result.exit_code == 0, result.output
+        payload = json.loads(result.output)
+        data = payload["data"]
+
+        assert data["available"] == ["claude"]
+        assert data["preferred_implementer"] is None
+        assert data["preferred_reviewer"] is None
+        assert data["implementer_agent"] is None
+        assert data["reviewer_agent"] is None
+
+    def test_reports_config_invalid_for_unknown_agent(self, tmp_path: Path) -> None:
+        repo_root = tmp_path / "repo"
+        repo_root.mkdir()
+        _write_agent_config(
+            repo_root,
+            "agents:\n"
+            "  available:\n"
+            "    - opencode\n"
+            "  selection:\n"
+            "    preferred_implementer: unknown-agent\n",
+        )
+
+        with patch(
+            "specify_cli.orchestrator_api.commands._get_main_repo_root",
+            return_value=repo_root,
+        ):
+            result = runner.invoke(app, ["agent-preferences"])
+
+        assert result.exit_code == 1
+        payload = json.loads(result.output)
+        assert payload["error_code"] == "CONFIG_INVALID"
 
 
 class TestListReady:

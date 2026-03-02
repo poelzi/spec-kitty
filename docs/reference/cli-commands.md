@@ -261,6 +261,7 @@ spec-kitty implement WP01 --json
 
 **Commands**:
 - `contract-version` - Return host contract version and provider compatibility minimum
+- `agent-preferences` - Return normalized agent/tool preferences (including model hints)
 - `feature-state` - Return full feature/WP state snapshot
 - `list-ready` - Return `planned` WPs whose dependencies are `done`
 - `start-implementation` - Composite claim/start transition for a WP
@@ -578,7 +579,7 @@ spec-kitty ops log --verbose
 
 ### spec-kitty agent config
 
-Manage project AI agent configuration (add, remove, list agents).
+Manage project AI agent configuration (agents + role preferences).
 
 **Usage**:
 ```bash
@@ -594,6 +595,8 @@ spec-kitty agent config [OPTIONS] COMMAND [ARGS]...
 | `list` | View configured agents and available options |
 | `add` | Add one or more agents to your project |
 | `remove` | Remove one or more agents from your project |
+| `set-role` | Set preferred implementation/review role defaults |
+| `clear-role` | Clear preferred implementation/review role defaults |
 | `status` | Audit agent configuration sync status |
 | `sync` | Synchronize filesystem with config.yaml |
 
@@ -624,6 +627,7 @@ Two sections:
 - **Configured agents**: Agents in `config.yaml` with status indicators:
   - ✓ (green) - Directory exists
   - ⚠ (yellow) - Configured but directory missing
+- **Role preferences** (optional): Preferred implement/review assignments, including model hints when present
 - **Available but not configured**: Agents you can add
 
 **Examples**:
@@ -638,6 +642,10 @@ Example output:
 Configured agents:
   ✓ opencode (.opencode/command/)
   ✓ claude (.claude/commands/)
+
+Role preferences:
+  - implement: opencode (model: gpt-5-coder)
+  - review: opencode (model: gpt-5-review)
 
 Available but not configured:
   - codex
@@ -772,6 +780,77 @@ spec-kitty agent config remove gemini --keep-config
 Restore later with:
 ```bash
 spec-kitty agent config sync --create-missing
+```
+
+#### spec-kitty agent config set-role
+
+Set preferred implementation/review role defaults.
+
+**Synopsis**:
+```bash
+spec-kitty agent config set-role <role> <agent> [--model <model>]
+```
+
+**Description**:
+
+Sets role defaults under `agents.selection` in `.kittify/config.yaml`.
+This supports deterministic assignment and allows the same agent tool to be used with different models.
+
+**Arguments**:
+
+- `<role>`: `implement` or `review` (also supports aliases: `impl`, `implementer`, `implementation`, `reviewer`)
+- `<agent>`: Agent key to assign (must be configured in `agents.available`)
+
+**Options**:
+
+- `--model <model>`: Optional model hint (for example `gpt-5-coder`)
+
+**Output**:
+
+- Success: `✓ Set <role> role to <agent> (model: <model>)`
+- Error: invalid role, invalid agent key, or agent not configured
+
+**Examples**:
+
+Set OpenCode for implementation with one model:
+```bash
+spec-kitty agent config set-role implement opencode --model gpt-5-coder
+```
+
+Set OpenCode for review with a different model:
+```bash
+spec-kitty agent config set-role review opencode --model gpt-5-review
+```
+
+Set review role without model hint:
+```bash
+spec-kitty agent config set-role review opencode
+```
+
+#### spec-kitty agent config clear-role
+
+Clear preferred implementation/review role defaults.
+
+**Synopsis**:
+```bash
+spec-kitty agent config clear-role <role>
+```
+
+**Description**:
+
+Clears a role assignment from `agents.selection`. If both role assignments are cleared, the `selection` block is removed from `config.yaml`.
+
+**Arguments**:
+
+- `<role>`: `implement` or `review` (aliases supported as in `set-role`)
+
+**Options**: None
+
+**Examples**:
+
+Clear review preference:
+```bash
+spec-kitty agent config clear-role review
 ```
 
 #### spec-kitty agent config status

@@ -417,11 +417,22 @@ agents:
   available:
     - opencode
     - claude
+  selection:
+    preferred_implementer:
+      tool: opencode
+      model: gpt-5-coder
+    preferred_reviewer:
+      tool: opencode
+      model: gpt-5-review
 ```
 
 | Field | Type | Description |
 |-------|------|-------------|
 | `agents.available` | list | Agents enabled for this project |
+| `agents.selection.preferred_implementer` | string \| object | Preferred implementation agent. String form: `opencode`; object form: `{tool: opencode, model: gpt-5-coder}` |
+| `agents.selection.preferred_reviewer` | string \| object | Preferred review agent. Supports same formats as implementer preference |
+
+`agents.selection` is optional. Use it when you want deterministic role defaults, including using the same tool with different models (for example, OpenCode with one model for implementation and another for review).
 
 ### Config-Driven Agent Management
 
@@ -439,10 +450,17 @@ agents:
     - claude
     - codex
     - opencode
+  selection:
+    preferred_implementer: opencode
+    preferred_reviewer:
+      tool: opencode
+      model: gpt-5-review
 ```
 
 **Fields**:
 - `available` (list): Agent keys currently active in project
+- `selection.preferred_implementer` (optional): Preferred implementation agent (`<agent>` or `{tool, model}`)
+- `selection.preferred_reviewer` (optional): Preferred review agent (`<agent>` or `{tool, model}`)
 
 **See**:
 - [Managing AI Agents](../how-to/manage-agents.md) - Complete guide to agent management commands
@@ -583,7 +601,22 @@ spec-kitty agent config add <agent-key>
 
 **Q: Can I use multiple agents in one project?**
 
-Yes! Configure multiple agents in `config.yaml` and they'll be used according to your selection strategy (`preferred` or `random`).
+Yes. Configure multiple agents in `config.yaml`, then optionally set `agents.selection.preferred_implementer` and `agents.selection.preferred_reviewer` for deterministic role defaults.
+
+You can also use the same tool with different models, for example:
+
+```yaml
+agents:
+  available:
+    - opencode
+  selection:
+    preferred_implementer:
+      tool: opencode
+      model: gpt-5-coder
+    preferred_reviewer:
+      tool: opencode
+      model: gpt-5-review
+```
 
 **Q: What if I manually deleted agent directories?**
 

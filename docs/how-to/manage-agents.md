@@ -12,10 +12,12 @@ Agent configuration is managed through `.kittify/config.yaml` and the `spec-kitt
 
 This guide shows you how to add agents to enable multi-agent workflows, remove agents you don't use, list configured agents, check sync status, and synchronize your filesystem with the config file.
 
-The five core commands covered in this guide are:
+The core commands covered in this guide are:
 - `list` - View configured agents and available options
 - `add` - Add one or more agents to your project
 - `remove` - Remove agents you no longer need
+- `set-role` - Set preferred implement/review defaults (optionally with model)
+- `clear-role` - Clear preferred implement/review defaults
 - `status` - Audit configuration sync status across all agents
 - `sync` - Synchronize filesystem with config.yaml
 
@@ -40,6 +42,8 @@ Before using agent config commands, ensure:
 | `spec-kitty agent config list` | View configured agents and available options |
 | `spec-kitty agent config add <agents>` | Add agents to your project |
 | `spec-kitty agent config remove <agents>` | Remove agents from your project |
+| `spec-kitty agent config set-role <role> <agent> [--model <model>]` | Set preferred implement/review defaults |
+| `spec-kitty agent config clear-role <role>` | Clear preferred implement/review defaults |
 | `spec-kitty agent config status` | Audit agent configuration sync status |
 | `spec-kitty agent config sync` | Synchronize filesystem with config.yaml |
 
@@ -61,6 +65,13 @@ agents:
     - claude
     - codex
     - opencode
+  selection:
+    preferred_implementer:
+      tool: opencode
+      model: gpt-5-coder
+    preferred_reviewer:
+      tool: opencode
+      model: gpt-5-review
 ```
 
 The `available` field contains a list of active agent keys. Each key corresponds to a specific directory:
@@ -86,7 +97,7 @@ To see which agents are currently configured in your project:
 spec-kitty agent config list
 ```
 
-The output shows two sections: configured agents and available agents you can add.
+The output can show up to three sections: configured agents, optional role preferences, and available agents you can add.
 
 Configured agents display a status indicator:
 - ✓ = Agent directory exists on filesystem
@@ -100,6 +111,10 @@ Example output:
 Configured agents:
   ✓ opencode (.opencode/command/)
   ✓ claude (.claude/commands/)
+
+Role preferences:
+  - implement: opencode (model: gpt-5-coder)
+  - review: opencode (model: gpt-5-review)
 
 Available but not configured:
   - codex
@@ -195,6 +210,41 @@ spec-kitty agent config add claude codex
 # Add another agent to broaden implementation/review coverage
 spec-kitty agent config add codex
 ```
+
+## Setting Role Preferences
+
+Use role preferences when you want deterministic defaults for implementation and review, including using the same tool with different models.
+
+### Set a Role Preference
+
+```bash
+spec-kitty agent config set-role <role> <agent> [--model <model>]
+```
+
+Examples:
+
+```bash
+# OpenCode for implementation
+spec-kitty agent config set-role implement opencode --model gpt-5-coder
+
+# OpenCode for review with a different model
+spec-kitty agent config set-role review opencode --model gpt-5-review
+```
+
+### Clear a Role Preference
+
+```bash
+spec-kitty agent config clear-role <role>
+```
+
+Examples:
+
+```bash
+spec-kitty agent config clear-role review
+spec-kitty agent config clear-role implement
+```
+
+If you clear both roles, the `agents.selection` block is removed from `config.yaml` automatically.
 
 ## Removing Agents
 

@@ -88,6 +88,24 @@ spec-kitty orchestrator-api contract-version --json [--provider-version <semver>
 
 Returns host `api_version` and minimum supported provider version.
 
+### agent-preferences
+
+```bash
+spec-kitty orchestrator-api agent-preferences --json
+```
+
+Returns normalized agent configuration for external providers, including
+model-aware role defaults:
+
+- `available`: configured agent keys
+- `preferred_implementer`: `{ "tool": <agent>, "model": <model?> } | null`
+- `preferred_reviewer`: `{ "tool": <agent>, "model": <model?> } | null`
+- `implementer_agent`: tool-only alias for backward compatibility
+- `reviewer_agent`: tool-only alias for backward compatibility
+
+This allows providers to use the same tool with different models for
+implementation vs review (for example OpenCode with distinct model IDs).
+
 ### feature-state
 
 ```bash
@@ -168,6 +186,7 @@ Runs preflight and merges WP branches in dependency order.
 - `WP_ALREADY_CLAIMED`
 - `POLICY_METADATA_REQUIRED`
 - `POLICY_VALIDATION_FAILED`
+- `CONFIG_INVALID`
 - `FEATURE_NOT_READY`
 - `PREFLIGHT_FAILED`
 - `MERGE_FAILED`

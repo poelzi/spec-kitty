@@ -73,6 +73,29 @@ class TestListCommand:
             assert "Available but not configured:" in result.stdout
             assert "claude" in result.stdout
 
+    def test_list_shows_role_preferences(self, mock_project):
+        """List output includes implement/review role preferences when configured."""
+        config_file = mock_project / ".kittify" / "config.yaml"
+        config_file.write_text(
+            "agents:\n"
+            "  available:\n"
+            "    - opencode\n"
+            "  selection:\n"
+            "    preferred_implementer:\n"
+            "      tool: opencode\n"
+            "      model: gpt-5-coder\n"
+            "    preferred_reviewer: opencode@gpt-5-review\n",
+            encoding="utf-8",
+        )
+
+        with patch("specify_cli.cli.commands.agent.config.find_repo_root", return_value=mock_project):
+            result = runner.invoke(app, ["list"])
+
+            assert result.exit_code == 0
+            assert "Role preferences:" in result.stdout
+            assert "implement: opencode (model: gpt-5-coder)" in result.stdout
+            assert "review: opencode (model: gpt-5-review)" in result.stdout
+
 
 class TestAddCommand:
     """Tests for 'spec-kitty agent config add' command."""
@@ -304,6 +327,92 @@ class TestSyncCommand:
 
             assert result.exit_code == 0
             assert "No changes needed" in result.stdout
+
+
+class TestRolePreferenceCommands:
+    """Tests for role preference subcommands."""
+
+    def test_set_role_implement_with_model(self, mock_project):
+        """set-role stores implement preference with model hint."""
+        with patch("specify_cli.cli.commands.agent.config.find_repo_root", return_value=mock_project):
+            result = runner.invoke(
+                app,
+                ["set-role", "implement", "opencode", "--model", "gpt-5-coder"],
+            )
+
+            assert result.exit_code == 0
+            assert "Set implement role to opencode (model: gpt-5-coder)" in result.stdout
+
+            from specify_cli.core.agent_config import load_agent_config
+
+            config = load_agent_config(mock_project)
+            assert config.selection is not None
+            assert config.selection.preferred_implementer is not None
+            assert config.selection.preferred_implementer.tool == "opencode"
+            assert config.selection.preferred_implementer.model == "gpt-5-coder"
+
+    def test_set_role_review_requires_configured_agent(self, mock_project):
+        """set-role fails when agent is valid but not configured."""
+        with patch("specify_cli.cli.commands.agent.config.find_repo_root", return_value=mock_project):
+            result = runner.invoke(app, ["set-role", "review", "claude"])
+
+            assert result.exit_code == 1
+            assert "is not configured in this project" in result.stdout
+            assert "spec-kitty agent config add claude" in result.stdout
+
+    def test_set_role_invalid_role(self, mock_project):
+        """set-role validates role names."""
+        with patch("specify_cli.cli.commands.agent.config.find_repo_root", return_value=mock_project):
+            result = runner.invoke(app, ["set-role", "qa", "opencode"])
+
+            assert result.exit_code == 1
+            assert "Invalid role" in result.stdout
+
+    def test_clear_role_removes_preference(self, mock_project):
+        """clear-role clears one role and keeps the other."""
+        config_file = mock_project / ".kittify" / "config.yaml"
+        config_file.write_text(
+            "agents:\n"
+            "  available:\n"
+            "    - opencode\n"
+            "  selection:\n"
+            "    preferred_implementer: opencode@gpt-5-coder\n"
+            "    preferred_reviewer: opencode@gpt-5-review\n",
+            encoding="utf-8",
+        )
+
+        with patch("specify_cli.cli.commands.agent.config.find_repo_root", return_value=mock_project):
+            result = runner.invoke(app, ["clear-role", "review"])
+
+            assert result.exit_code == 0
+            assert "Cleared review role preference" in result.stdout
+
+            from specify_cli.core.agent_config import load_agent_config
+
+            config = load_agent_config(mock_project)
+            assert config.selection is not None
+            assert config.selection.preferred_implementer is not None
+            assert config.selection.preferred_reviewer is None
+
+    def test_clear_role_removes_selection_block_when_empty(self, mock_project):
+        """Clearing last remaining role removes agents.selection entirely."""
+        config_file = mock_project / ".kittify" / "config.yaml"
+        config_file.write_text(
+            "agents:\n"
+            "  available:\n"
+            "    - opencode\n"
+            "  selection:\n"
+            "    preferred_implementer: opencode@gpt-5-coder\n",
+            encoding="utf-8",
+        )
+
+        with patch("specify_cli.cli.commands.agent.config.find_repo_root", return_value=mock_project):
+            result = runner.invoke(app, ["clear-role", "implement"])
+
+            assert result.exit_code == 0
+
+            content = (mock_project / ".kittify" / "config.yaml").read_text(encoding="utf-8")
+            assert "selection:" not in content
 
 
 class TestAgentKeyMapping:

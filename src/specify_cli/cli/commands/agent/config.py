@@ -15,6 +15,8 @@ from specify_cli.core.agent_config import (
     save_agent_config,
     AgentConfig,
     AgentConfigError,
+    AgentRolePreference,
+    AgentSelectionConfig,
 )
 from specify_cli.upgrade.migrations.m_0_9_1_complete_lane_migration import (
     AGENT_DIR_TO_KEY,
@@ -24,7 +26,7 @@ from specify_cli.tasks_support import find_repo_root
 
 app = typer.Typer(
     name="config",
-    help="Manage project AI agent configuration (add, remove, list agents)",
+    help="Manage project AI agent configuration (agents + role preferences)",
     no_args_is_help=True,
 )
 console = Console()
@@ -35,6 +37,26 @@ KEY_TO_AGENT_DIR = {
     for agent_dir, subdir in CompleteLaneMigration.AGENT_DIRS
     if agent_dir in AGENT_DIR_TO_KEY
 }
+
+
+def _format_role_preference(tool: str, model: str | None) -> str:
+    if model:
+        return f"{tool} (model: {model})"
+    return tool
+
+
+_ROLE_ALIASES = {
+    "implement": "preferred_implementer",
+    "implementation": "preferred_implementer",
+    "implementer": "preferred_implementer",
+    "impl": "preferred_implementer",
+    "review": "preferred_reviewer",
+    "reviewer": "preferred_reviewer",
+}
+
+
+def _normalize_role(role: str) -> str | None:
+    return _ROLE_ALIASES.get(role.strip().lower())
 
 
 def _load_config_or_exit(repo_root: Path) -> AgentConfig:
@@ -77,6 +99,24 @@ def list_agents():
     # Show available but not configured
     all_agent_keys = set(AGENT_DIR_TO_KEY.values())
     not_configured = all_agent_keys - set(config.available)
+
+    if config.selection and (
+        config.selection.preferred_implementer
+        or config.selection.preferred_reviewer
+    ):
+        console.print("\n[cyan]Role preferences:[/cyan]")
+        if config.selection.preferred_implementer:
+            pref = config.selection.preferred_implementer
+            console.print(
+                "  - implement: "
+                + _format_role_preference(pref.tool, pref.model)
+            )
+        if config.selection.preferred_reviewer:
+            pref = config.selection.preferred_reviewer
+            console.print(
+                "  - review: "
+                + _format_role_preference(pref.tool, pref.model)
+            )
 
     if not_configured:
         console.print("\n[dim]Available but not configured:[/dim]")
@@ -386,6 +426,127 @@ def sync_agents(
         console.print("[dim]No changes needed - filesystem matches config[/dim]")
     else:
         console.print("\n[green]✓ Sync complete[/green]")
+
+
+@app.command(name="set-role")
+def set_role(
+    role: str = typer.Argument(
+        ..., help="Role: implement|review (aliases: impl, implementer, reviewer)"
+    ),
+    agent: str = typer.Argument(..., help="Agent key to assign to the role"),
+    model: str | None = typer.Option(
+        None,
+        "--model",
+        help="Optional model hint for this role (for example gpt-5-coder)",
+    ),
+):
+    """Set preferred implementation/review role defaults.
+
+    Examples:
+        spec-kitty agent config set-role implement opencode --model gpt-5-coder
+        spec-kitty agent config set-role review opencode --model gpt-5-review
+    """
+    try:
+        repo_root = find_repo_root()
+    except Exception as e:
+        console.print(f"[red]Error:[/red] {e}")
+        raise typer.Exit(1)
+
+    config = _load_config_or_exit(repo_root)
+
+    role_key = _normalize_role(role)
+    if role_key is None:
+        console.print(
+            "[red]Error:[/red] Invalid role. Use one of: "
+            "implement, implementation, implementer, impl, review, reviewer"
+        )
+        raise typer.Exit(1)
+
+    if agent not in AGENT_DIR_TO_KEY.values():
+        console.print(f"[red]Error:[/red] Invalid agent key: {agent}")
+        console.print(f"\nValid agents: {', '.join(sorted(AGENT_DIR_TO_KEY.values()))}")
+        raise typer.Exit(1)
+
+    if agent not in config.available:
+        console.print(
+            f"[red]Error:[/red] Agent '{agent}' is not configured in this project."
+        )
+        console.print(
+            f"Add it first: [cyan]spec-kitty agent config add {agent}[/cyan]"
+        )
+        raise typer.Exit(1)
+
+    model_value = model.strip() if model else None
+    if model_value == "":
+        model_value = None
+
+    selection = config.selection or AgentSelectionConfig()
+    preference = AgentRolePreference(tool=agent, model=model_value)
+
+    if role_key == "preferred_implementer":
+        selection.preferred_implementer = preference
+        role_label = "implement"
+    else:
+        selection.preferred_reviewer = preference
+        role_label = "review"
+
+    config.selection = selection
+    save_agent_config(repo_root, config)
+
+    console.print(
+        f"[green]✓[/green] Set {role_label} role to "
+        f"{_format_role_preference(preference.tool, preference.model)}"
+    )
+
+
+@app.command(name="clear-role")
+def clear_role(
+    role: str = typer.Argument(
+        ..., help="Role: implement|review (aliases: impl, implementer, reviewer)"
+    ),
+):
+    """Clear preferred implementation/review role defaults."""
+    try:
+        repo_root = find_repo_root()
+    except Exception as e:
+        console.print(f"[red]Error:[/red] {e}")
+        raise typer.Exit(1)
+
+    config = _load_config_or_exit(repo_root)
+
+    role_key = _normalize_role(role)
+    if role_key is None:
+        console.print(
+            "[red]Error:[/red] Invalid role. Use one of: "
+            "implement, implementation, implementer, impl, review, reviewer"
+        )
+        raise typer.Exit(1)
+
+    if not config.selection:
+        console.print("[dim]No role preferences configured.[/dim]")
+        return
+
+    if role_key == "preferred_implementer":
+        if config.selection.preferred_implementer is None:
+            console.print("[dim]Implement role preference already clear.[/dim]")
+            return
+        config.selection.preferred_implementer = None
+        cleared_role = "implement"
+    else:
+        if config.selection.preferred_reviewer is None:
+            console.print("[dim]Review role preference already clear.[/dim]")
+            return
+        config.selection.preferred_reviewer = None
+        cleared_role = "review"
+
+    if (
+        config.selection.preferred_implementer is None
+        and config.selection.preferred_reviewer is None
+    ):
+        config.selection = None
+
+    save_agent_config(repo_root, config)
+    console.print(f"[green]✓[/green] Cleared {cleared_role} role preference")
 
 
 __all__ = ["app"]

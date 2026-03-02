@@ -18,10 +18,11 @@ Your orchestrator must:
 ## Required Flow
 
 1. Check API compatibility.
-2. Poll for ready WPs.
-3. Start implementation for selected WPs.
-4. Transition WPs through review/complete loops.
-5. Accept and optionally merge when all WPs are done.
+2. Load configured agent preferences.
+3. Poll for ready WPs.
+4. Start implementation for selected WPs.
+5. Transition WPs through review/complete loops.
+6. Accept and optionally merge when all WPs are done.
 
 ### 1. Check compatibility
 
@@ -29,14 +30,23 @@ Your orchestrator must:
 spec-kitty orchestrator-api contract-version --json
 ```
 
-### 2. Discover work
+### 2. Load agent preferences
+
+```bash
+spec-kitty orchestrator-api agent-preferences --json
+```
+
+Use this payload to apply role defaults, including same-tool/different-model setups
+(for example OpenCode with one model for implementation and another for review).
+
+### 3. Discover work
 
 ```bash
 spec-kitty orchestrator-api feature-state --feature <slug> --json
 spec-kitty orchestrator-api list-ready --feature <slug> --json
 ```
 
-### 3. Start implementation
+### 4. Start implementation
 
 ```bash
 spec-kitty orchestrator-api start-implementation \
@@ -49,7 +59,7 @@ spec-kitty orchestrator-api start-implementation \
 
 Use returned `workspace_path` and `prompt_path` to run your agent process.
 
-### 4. Drive transitions
+### 5. Drive transitions
 
 ```bash
 # implementation complete
@@ -68,7 +78,7 @@ spec-kitty orchestrator-api start-review \
   --policy '<json>' --review-ref review/WP01/attempt-2 --json
 ```
 
-### 5. Finalize
+### 6. Finalize
 
 ```bash
 spec-kitty orchestrator-api accept-feature --feature <slug> --actor my-orchestrator --json

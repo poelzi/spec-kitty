@@ -16,6 +16,7 @@ from typing import Any
 
 import typer
 
+from specify_cli.core.agent_config import AgentConfigError, load_agent_config
 from specify_cli.core.dependency_graph import build_dependency_graph
 from specify_cli.core.paths import locate_project_root
 from specify_cli.git.commit_helpers import safe_commit
@@ -76,6 +77,38 @@ def _resolve_feature_dir(main_repo_root: Path, feature_slug: str) -> Path | None
     if not feature_dir.is_dir():
         return None
     return feature_dir
+
+
+def _serialize_role_preference(preference: Any | None) -> dict[str, str] | None:
+    """Serialize a role preference dataclass to JSON-safe payload."""
+    if preference is None:
+        return None
+
+    payload = {"tool": str(preference.tool)}
+    model = getattr(preference, "model", None)
+    if model:
+        payload["model"] = str(model)
+    return payload
+
+
+def _build_agent_preferences_payload(main_repo_root: Path) -> dict[str, Any]:
+    """Return normalized agent preferences for external orchestrators."""
+    config = load_agent_config(main_repo_root)
+
+    selection = config.selection
+    preferred_implementer = (
+        selection.preferred_implementer if selection is not None else None
+    )
+    preferred_reviewer = selection.preferred_reviewer if selection is not None else None
+
+    return {
+        "available": config.available,
+        "preferred_implementer": _serialize_role_preference(preferred_implementer),
+        "preferred_reviewer": _serialize_role_preference(preferred_reviewer),
+        # Legacy tool-only aliases for providers that haven't adopted model-aware parsing.
+        "implementer_agent": preferred_implementer.tool if preferred_implementer else None,
+        "reviewer_agent": preferred_reviewer.tool if preferred_reviewer else None,
+    }
 
 
 def _extract_wp_id(stem: str) -> str | None:
@@ -298,7 +331,33 @@ def contract_version(
     )
 
 
-# ── Command 2: feature-state ───────────────────────────────────────────────
+# ── Command 2: agent-preferences ───────────────────────────────────────────
+
+
+@app.command(name="agent-preferences")
+def agent_preferences(
+    json_output: bool = typer.Option(True, "--json/--no-json", help="Output as JSON"),
+) -> None:
+    """Return normalized agent/tool preferences for external orchestrators."""
+    cmd = "agent-preferences"
+    main_repo_root = _get_main_repo_root()
+
+    try:
+        payload = _build_agent_preferences_payload(main_repo_root)
+    except AgentConfigError as exc:
+        _fail(cmd, "CONFIG_INVALID", str(exc))
+        return
+
+    _emit(
+        make_envelope(
+            command=cmd,
+            success=True,
+            data=payload,
+        )
+    )
+
+
+# ── Command 3: feature-state ───────────────────────────────────────────────
 
 
 @app.command(name="feature-state")
@@ -354,7 +413,7 @@ def feature_state(
     )
 
 
-# ── Command 3: list-ready ──────────────────────────────────────────────────
+# ── Command 4: list-ready ──────────────────────────────────────────────────
 
 
 @app.command(name="list-ready")
@@ -402,7 +461,7 @@ def list_ready(
     )
 
 
-# ── Command 4: start-implementation ────────────────────────────────────────
+# ── Command 5: start-implementation ────────────────────────────────────────
 
 
 @app.command(name="start-implementation")
@@ -491,7 +550,7 @@ def start_implementation(
     )
 
 
-# ── Command 5: start-review ────────────────────────────────────────────────
+# ── Command 6: start-review ────────────────────────────────────────────────
 
 
 @app.command(name="start-review")
@@ -569,7 +628,7 @@ def start_review(
     )
 
 
-# ── Command 6: transition ──────────────────────────────────────────────────
+# ── Command 7: transition ──────────────────────────────────────────────────
 
 
 @app.command(name="transition")
@@ -673,7 +732,7 @@ def transition(
     )
 
 
-# ── Command 7: append-history ──────────────────────────────────────────────
+# ── Command 8: append-history ──────────────────────────────────────────────
 
 
 @app.command(name="append-history")
@@ -727,7 +786,7 @@ def append_history(
     )
 
 
-# ── Command 8: accept-feature ──────────────────────────────────────────────
+# ── Command 9: accept-feature ──────────────────────────────────────────────
 
 
 @app.command(name="accept-feature")
@@ -789,7 +848,7 @@ def accept_feature(
     )
 
 
-# ── Command 9: merge-feature ───────────────────────────────────────────────
+# ── Command 10: merge-feature ──────────────────────────────────────────────
 
 
 @app.command(name="merge-feature")

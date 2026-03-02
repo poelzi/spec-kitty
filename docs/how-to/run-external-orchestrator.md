@@ -40,6 +40,12 @@ spec-kitty-orchestrator orchestrate --feature 034-my-feature --dry-run
 
 Use this to validate configuration before mutating WP lanes.
 
+Optional: inspect host-side role defaults (including model hints):
+
+```bash
+spec-kitty orchestrator-api agent-preferences --json
+```
+
 ## 3. Start Orchestration
 
 ```bash
