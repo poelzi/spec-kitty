@@ -97,6 +97,35 @@ spec-kitty validate-encoding --all --fix
 
 ---
 
+## 3a. Template-First Workflow Rule (Critical)
+
+**For WP implement/review work, agents MUST run through the command templates and workflow prompts.**
+
+1. Use the template entrypoints (slash commands) instead of ad-hoc flows:
+   - `/spec-kitty.implement ...`
+   - `/spec-kitty.review ...`
+   - `/spec-kitty.implement-all ...` (orchestration only)
+
+2. Never bypass workflow templates by manually editing lane fields or running
+   custom review/implement loops when an official workflow command exists.
+
+3. During review, complete the WP using the exact commands shown at the bottom
+   of the generated review prompt:
+   - Approve: follow merge/rebase instructions from the prompt, then run
+     `spec-kitty agent tasks move-task WP## --to done --note "..."`
+   - Reject: write feedback to the exact prompt-provided temp path, then run
+     `spec-kitty agent tasks move-task WP## --to planned --review-feedback-file <path>`
+
+4. Sub-agent and parallel execution guard:
+   - Each sub-agent must receive a literal slash-command prompt, not freeform instructions.
+   - One WP per sub-agent session.
+   - Orchestrators must verify status between waves with
+     `spec-kitty agent tasks status --json --feature <feature-slug>`.
+   - Do not transition a WP lane unless that agent ran the full workflow prompt
+     for that same WP.
+
+---
+
 ## 4. Work Quality Rule
 
 **Produce secure, tested, documented work.**

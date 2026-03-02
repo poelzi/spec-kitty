@@ -76,6 +76,36 @@ spec-kitty agent tasks list-tasks --lane doing
 spec-kitty agent tasks add-history WP01 --note "Progress update"
 ```
 
+### Template-First Workflow Enforcement (Critical)
+
+These rules prevent agents from bypassing workflow templates when users ask for
+bulk execution (for example, "review all open WPs").
+
+1. **Always start from the command template path** for implement/review work:
+   - Use `/spec-kitty.implement ...` for implementation.
+   - Use `/spec-kitty.review ...` for review.
+   - Use `/spec-kitty.implement-all ...` only as an orchestrator that launches
+     per-WP template runs.
+
+2. **Do not run ad-hoc WP flows** (manual lane edits, custom review loops, or
+   direct edits to prompt frontmatter) when a workflow template exists.
+
+3. **Review completion must follow the prompt footer commands exactly**:
+   - Approve path: run the merge/rebase steps from the prompt, then run
+     `spec-kitty agent tasks move-task WP## --to done --note "..."`.
+   - Reject path: write feedback to the **exact unique temp feedback file path**
+     shown in the prompt, then run
+     `spec-kitty agent tasks move-task WP## --to planned --review-feedback-file <path>`.
+
+4. **Sub-agent and parallelization guard**:
+   - Each sub-agent must receive a **literal slash-command prompt**
+     (`/spec-kitty.implement ...` or `/spec-kitty.review ...`), not freeform instructions.
+   - One WP per sub-agent session.
+   - Orchestrators must verify status between waves with
+     `spec-kitty agent tasks status --json --feature <feature-slug>`.
+   - Orchestrators must not transition a WP lane unless they themselves ran the
+     full workflow prompt for that WP.
+
 ---
 
 ## General practices

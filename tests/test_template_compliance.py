@@ -161,6 +161,37 @@ def test_agents_md_shows_flat_structure():
         "AGENTS.md should not show old subdirectory structure"
 
 
+def test_agents_md_enforces_template_first_wp_workflows():
+    """AGENTS.md must require template-first WP execution and subagent guardrails.
+
+    This prevents ad-hoc review/implement loops when users request bulk actions
+    (for example, "review all open WPs").
+    """
+    spec_kitty_root = Path(__file__).parent.parent
+    agents_md = spec_kitty_root / "src" / "specify_cli" / "templates" / "AGENTS.md"
+
+    if not agents_md.exists():
+        pytest.skip("AGENTS.md not found")
+
+    content = agents_md.read_text(encoding="utf-8")
+
+    required_snippets = [
+        "Template-First Workflow Rule",
+        "/spec-kitty.implement",
+        "/spec-kitty.review",
+        "review-feedback-file",
+        "One WP per sub-agent session",
+        "spec-kitty agent tasks status --json --feature <feature-slug>",
+    ]
+
+    missing = [snippet for snippet in required_snippets if snippet not in content]
+    if missing:
+        msg = "\n\nAGENTS.md is missing required template-first workflow guardrails:\n"
+        for snippet in missing:
+            msg += f"- {snippet}\n"
+        pytest.fail(msg)
+
+
 def test_no_deprecated_script_references():
     """Templates must not reference deprecated .kittify/scripts/ paths.
 
