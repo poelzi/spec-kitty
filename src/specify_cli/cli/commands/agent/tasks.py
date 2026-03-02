@@ -7,7 +7,7 @@ import re
 import subprocess
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 import typer
 from rich.console import Console
@@ -21,6 +21,7 @@ from specify_cli.core.dependency_graph import (
 from specify_cli.core.feature_detection import (
     FeatureDetectionError,
     detect_feature_slug,
+    get_feature_upstream_branch,
     get_feature_target_branch,
 )
 from specify_cli.core.paths import (
@@ -1972,6 +1973,13 @@ def status(
             help="Minutes of inactivity before a WP is considered stale",
         ),
     ] = 10,
+    reconcile: Annotated[
+        bool,
+        typer.Option(
+            "--reconcile",
+            help="Compare lane metadata against git integration state",
+        ),
+    ] = False,
 ):
     """Display kanban status board for all work packages in a feature.
 
@@ -1986,6 +1994,7 @@ def status(
         spec-kitty agent tasks status --feature 012-documentation-mission
         spec-kitty agent tasks status --json
         spec-kitty agent tasks status --stale-threshold 15
+        spec-kitty agent tasks status --reconcile
     """
     from collections import Counter
 
@@ -2053,6 +2062,18 @@ def status(
             console.print(f"[yellow]No work packages found in {tasks_dir}[/yellow]")
             raise typer.Exit(0)
 
+        reconciliation_report: Optional[Dict[str, Any]] = None
+        if reconcile:
+            reconciliation_report = _build_reconciliation_report(
+                main_repo_root=main_repo_root,
+                feature_slug=feature_slug,
+                work_packages=work_packages,
+            )
+            for wp in work_packages:
+                wp_reconcile = reconciliation_report["work_packages"].get(wp["id"])
+                if wp_reconcile:
+                    wp["reconcile"] = wp_reconcile
+
         # JSON output
         if json_output:
             # Check for stale WPs first (need to do this before JSON output too)
@@ -2086,6 +2107,16 @@ def status(
                 ),
                 "stale_wps": stale_count,
             }
+            if reconciliation_report:
+                result["reconciliation"] = {
+                    "landing_branch": reconciliation_report["landing_branch"],
+                    "upstream_branch": reconciliation_report["upstream_branch"],
+                    "landing_in_upstream": reconciliation_report[
+                        "landing_in_upstream"
+                    ],
+                    "mismatch_count": reconciliation_report["mismatch_count"],
+                    "mismatch_wp_ids": reconciliation_report["mismatch_wp_ids"],
+                }
             print(json.dumps(result, indent=2))
             return
 
@@ -2259,9 +2290,146 @@ def status(
         console.print(Panel(summary, title="[bold]Summary[/bold]", border_style="dim"))
         console.print()
 
+        if reconciliation_report:
+            console.print("[bold magenta]🔎 Lane / Integration Reconciliation:[/bold magenta]")
+            console.print(
+                f"  • Landing branch: [bold]{reconciliation_report['landing_branch']}[/bold]"
+            )
+            console.print(
+                f"  • Upstream branch: [bold]{reconciliation_report['upstream_branch']}[/bold]"
+            )
+            liu = reconciliation_report["landing_in_upstream"]
+            if liu is True:
+                liu_text = "yes"
+            elif liu is False:
+                liu_text = "no"
+            else:
+                liu_text = "unknown"
+            console.print(f"  • Landing tip in upstream: {liu_text}")
+
+            mismatch_ids = reconciliation_report["mismatch_wp_ids"]
+            if mismatch_ids:
+                console.print(
+                    f"  • [yellow]Mismatches:[/yellow] {reconciliation_report['mismatch_count']} ({', '.join(mismatch_ids)})"
+                )
+                for wp_id in mismatch_ids:
+                    rec = reconciliation_report["work_packages"][wp_id]
+                    console.print(
+                        f"    - {wp_id}: {rec['reason']} [dim](suggested: {rec['suggested_next_step']})[/dim]"
+                    )
+            else:
+                console.print("  • [green]No lane/integration mismatches detected[/green]")
+            console.print()
+
     except Exception as e:
         _output_error(json_output, str(e))
         raise typer.Exit(1)
+
+
+def _git_ref_exists(repo_root: Path, ref: str) -> bool:
+    """Return True when a local git ref exists."""
+    result = subprocess.run(
+        ["git", "rev-parse", "--verify", ref],
+        cwd=repo_root,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    return result.returncode == 0
+
+
+def _git_is_ancestor(repo_root: Path, ancestor: str, descendant: str) -> Optional[bool]:
+    """Return ancestry relation using merge-base --is-ancestor.
+
+    Returns:
+        True when ancestor is contained in descendant, False when not,
+        None when refs cannot be resolved.
+    """
+    if not _git_ref_exists(repo_root, ancestor) or not _git_ref_exists(
+        repo_root, descendant
+    ):
+        return None
+
+    result = subprocess.run(
+        ["git", "merge-base", "--is-ancestor", ancestor, descendant],
+        cwd=repo_root,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if result.returncode == 0:
+        return True
+    if result.returncode == 1:
+        return False
+    return None
+
+
+def _build_reconciliation_report(
+    *,
+    main_repo_root: Path,
+    feature_slug: str,
+    work_packages: List[Dict[str, Any]],
+) -> Dict[str, Any]:
+    """Compare lane metadata with branch integration state."""
+    landing_branch = get_feature_target_branch(main_repo_root, feature_slug)
+    try:
+        upstream_branch = get_feature_upstream_branch(main_repo_root, feature_slug)
+    except Exception:
+        upstream_branch = resolve_primary_branch(main_repo_root)
+
+    landing_in_upstream = _git_is_ancestor(
+        main_repo_root, landing_branch, upstream_branch
+    )
+
+    mismatch_wp_ids: List[str] = []
+    per_wp: Dict[str, Dict[str, Any]] = {}
+
+    for wp in work_packages:
+        wp_id = str(wp["id"])
+        lane = str(wp.get("lane") or "unknown")
+        branch_name = f"{feature_slug}-{wp_id}"
+        branch_exists = _git_ref_exists(main_repo_root, branch_name)
+        in_landing = _git_is_ancestor(main_repo_root, branch_name, landing_branch)
+        in_upstream = _git_is_ancestor(main_repo_root, branch_name, upstream_branch)
+
+        mismatch = False
+        reason = ""
+        suggested = "no action"
+
+        if in_landing is True and lane in {"planned", "doing"}:
+            mismatch = True
+            reason = f"lane is '{lane}' but branch tip is already in landing"
+            suggested = "move to for_review or done"
+        elif in_landing is False and lane == "done":
+            mismatch = True
+            reason = "lane is 'done' but branch tip is not in landing"
+            suggested = "verify merge or move back to for_review"
+        elif in_landing is None and not branch_exists and lane in {"doing", "for_review"}:
+            mismatch = True
+            reason = "lane implies active WP branch, but branch is missing"
+            suggested = "verify branch/worktree and lane ownership"
+
+        if mismatch:
+            mismatch_wp_ids.append(wp_id)
+
+        per_wp[wp_id] = {
+            "branch": branch_name,
+            "branch_exists": branch_exists,
+            "in_landing": in_landing,
+            "in_upstream": in_upstream,
+            "is_mismatch": mismatch,
+            "reason": reason,
+            "suggested_next_step": suggested,
+        }
+
+    return {
+        "landing_branch": landing_branch,
+        "upstream_branch": upstream_branch,
+        "landing_in_upstream": landing_in_upstream,
+        "mismatch_count": len(mismatch_wp_ids),
+        "mismatch_wp_ids": mismatch_wp_ids,
+        "work_packages": per_wp,
+    }
 
 
 @app.command(name="list-dependents")

@@ -1276,3 +1276,155 @@ Content
         assert output["wp_id"] == "WP02"
         assert output["depends_on"] == ["WP01", "WP04"]
         assert output["dependents"] == ["WP03"]
+
+
+class TestStatusReconcile:
+    """Tests for `status --reconcile` diagnostics."""
+
+    def _write_wp(self, tasks_dir: Path, wp_id: str, title: str, lane: str) -> None:
+        (tasks_dir / f"{wp_id}-{title.lower().replace(' ', '-')}.md").write_text(
+            f"""---
+work_package_id: \"{wp_id}\"
+title: \"{title}\"
+lane: \"{lane}\"
+---
+
+# {title}
+
+## Activity Log
+
+- 2026-01-01T00:00:00Z - system - lane={lane} - seeded
+""",
+            encoding="utf-8",
+        )
+
+    @patch("specify_cli.cli.commands.agent.tasks._ensure_target_branch_checked_out")
+    @patch("specify_cli.cli.commands.agent.tasks.locate_project_root")
+    @patch("specify_cli.cli.commands.agent.tasks._find_feature_slug")
+    @patch("specify_cli.cli.commands.agent.tasks.get_feature_target_branch")
+    @patch("specify_cli.cli.commands.agent.tasks.get_feature_upstream_branch")
+    @patch("specify_cli.core.stale_detection.check_doing_wps_for_staleness")
+    @patch("subprocess.run")
+    def test_status_json_includes_reconciliation_details(
+        self,
+        mock_run: Mock,
+        mock_stale: Mock,
+        mock_upstream: Mock,
+        mock_target: Mock,
+        mock_slug: Mock,
+        mock_root: Mock,
+        mock_ensure: Mock,
+        tmp_path: Path,
+    ):
+        repo_root = tmp_path
+        (repo_root / ".kittify").mkdir()
+        feature_slug = "019-demo-feature"
+        tasks_dir = repo_root / "kitty-specs" / feature_slug / "tasks"
+        tasks_dir.mkdir(parents=True)
+
+        self._write_wp(tasks_dir, "WP01", "First", "doing")
+        self._write_wp(tasks_dir, "WP02", "Second", "done")
+
+        mock_root.return_value = repo_root
+        mock_slug.return_value = feature_slug
+        mock_ensure.return_value = (repo_root, "main")
+        mock_target.return_value = feature_slug
+        mock_upstream.return_value = "main"
+        mock_stale.return_value = {}
+
+        existing_refs = {feature_slug, "main", f"{feature_slug}-WP01", f"{feature_slug}-WP02"}
+        ancestry = {
+            (f"{feature_slug}-WP01", feature_slug): 0,
+            (f"{feature_slug}-WP01", "main"): 1,
+            (f"{feature_slug}-WP02", feature_slug): 1,
+            (f"{feature_slug}-WP02", "main"): 1,
+            (feature_slug, "main"): 1,
+        }
+
+        def _git_side_effect(*args, **kwargs):
+            cmd = args[0] if args else kwargs.get("args", [])
+            if cmd[:3] == ["git", "rev-parse", "--verify"]:
+                ref = cmd[3]
+                return Mock(returncode=0 if ref in existing_refs else 1, stdout="", stderr="")
+            if cmd[:3] == ["git", "merge-base", "--is-ancestor"]:
+                anc = cmd[3]
+                desc = cmd[4]
+                return Mock(returncode=ancestry.get((anc, desc), 1), stdout="", stderr="")
+            return Mock(returncode=0, stdout="", stderr="")
+
+        mock_run.side_effect = _git_side_effect
+
+        result = runner.invoke(
+            app,
+            ["status", "--feature", feature_slug, "--json", "--reconcile"],
+        )
+
+        assert result.exit_code == 0
+        payload = json.loads(result.stdout)
+        assert payload["reconciliation"]["landing_branch"] == feature_slug
+        assert payload["reconciliation"]["upstream_branch"] == "main"
+        assert payload["reconciliation"]["mismatch_count"] == 2
+        assert set(payload["reconciliation"]["mismatch_wp_ids"]) == {"WP01", "WP02"}
+
+        by_id = {wp["id"]: wp for wp in payload["work_packages"]}
+        assert by_id["WP01"]["reconcile"]["in_landing"] is True
+        assert by_id["WP01"]["reconcile"]["is_mismatch"] is True
+        assert by_id["WP02"]["reconcile"]["in_landing"] is False
+        assert by_id["WP02"]["reconcile"]["is_mismatch"] is True
+
+    @patch("specify_cli.cli.commands.agent.tasks._ensure_target_branch_checked_out")
+    @patch("specify_cli.cli.commands.agent.tasks.locate_project_root")
+    @patch("specify_cli.cli.commands.agent.tasks._find_feature_slug")
+    @patch("specify_cli.cli.commands.agent.tasks.get_feature_target_branch")
+    @patch("specify_cli.cli.commands.agent.tasks.get_feature_upstream_branch")
+    @patch("specify_cli.core.stale_detection.check_doing_wps_for_staleness")
+    @patch("subprocess.run")
+    def test_status_human_output_shows_reconciliation_section(
+        self,
+        mock_run: Mock,
+        mock_stale: Mock,
+        mock_upstream: Mock,
+        mock_target: Mock,
+        mock_slug: Mock,
+        mock_root: Mock,
+        mock_ensure: Mock,
+        tmp_path: Path,
+    ):
+        repo_root = tmp_path
+        (repo_root / ".kittify").mkdir()
+        feature_slug = "019-demo-feature"
+        tasks_dir = repo_root / "kitty-specs" / feature_slug / "tasks"
+        tasks_dir.mkdir(parents=True)
+
+        self._write_wp(tasks_dir, "WP01", "First", "doing")
+
+        mock_root.return_value = repo_root
+        mock_slug.return_value = feature_slug
+        mock_ensure.return_value = (repo_root, "main")
+        mock_target.return_value = feature_slug
+        mock_upstream.return_value = "main"
+        mock_stale.return_value = {}
+
+        def _git_side_effect(*args, **kwargs):
+            cmd = args[0] if args else kwargs.get("args", [])
+            if cmd[:3] == ["git", "rev-parse", "--verify"]:
+                return Mock(returncode=0, stdout="", stderr="")
+            if cmd[:3] == ["git", "merge-base", "--is-ancestor"]:
+                anc = cmd[3]
+                desc = cmd[4]
+                if anc == f"{feature_slug}-WP01" and desc == feature_slug:
+                    return Mock(returncode=0, stdout="", stderr="")
+                return Mock(returncode=1, stdout="", stderr="")
+            return Mock(returncode=0, stdout="", stderr="")
+
+        mock_run.side_effect = _git_side_effect
+
+        result = runner.invoke(
+            app,
+            ["status", "--feature", feature_slug, "--reconcile"],
+        )
+
+        assert result.exit_code == 0
+        assert "Lane / Integration Reconciliation" in result.stdout
+        assert "Mismatches:" in result.stdout
+        assert "WP01" in result.stdout
