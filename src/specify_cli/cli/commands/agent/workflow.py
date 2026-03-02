@@ -712,9 +712,58 @@ def implement(
             # Reload to get updated content
             wp = locate_work_package(repo_root, feature_slug, normalized_wp_id)
         else:
-            print(
-                f"⚠️  {normalized_wp_id} is already in lane: {current_lane}. Workflow implement will not move it to doing."
-            )
+            if agent:
+                import os
+                from datetime import datetime, timezone
+
+                shell_pid = str(os.getppid())
+                current_agent = extract_scalar(wp.frontmatter, "agent") or ""
+                current_shell_pid = extract_scalar(wp.frontmatter, "shell_pid") or ""
+
+                if current_agent == agent and current_shell_pid == shell_pid:
+                    print(
+                        f"ℹ️  {normalized_wp_id} is already in lane: {current_lane} and claimed by {agent} (PID: {shell_pid})."
+                    )
+                else:
+                    updated_front = set_scalar(wp.frontmatter, "lane", "doing")
+                    updated_front = set_scalar(updated_front, "agent", agent)
+                    updated_front = set_scalar(updated_front, "shell_pid", shell_pid)
+
+                    timestamp = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+                    history_entry = f"- {timestamp} – {agent} – shell_pid={shell_pid} – lane=doing – Refreshed implementation claim via workflow command"
+                    updated_body = append_activity_log(wp.body, history_entry)
+                    updated_doc = build_document(updated_front, updated_body, wp.padding)
+                    wp.path.write_text(updated_doc, encoding="utf-8")
+
+                    status_repo_root = _resolve_git_repo_root_for_path(wp.path, main_repo_root)
+                    if _is_git_repo(status_repo_root):
+                        actual_wp_path = wp.path.resolve()
+                        commit_success = safe_commit(
+                            repo_path=status_repo_root,
+                            files_to_commit=[actual_wp_path],
+                            commit_message=f"chore: Refresh {normalized_wp_id} implementation claim [{agent}]",
+                            allow_empty=True,
+                            no_verify=True,
+                        )
+                        if not commit_success:
+                            print(
+                                f"Error: Failed to commit workflow status update for {normalized_wp_id}. "
+                                "Status claim refresh aborted."
+                            )
+                            raise typer.Exit(1)
+                    else:
+                        print("Warning: No git repository detected. Skipping status auto-commit.")
+
+                    print(
+                        f"✓ Refreshed {normalized_wp_id} claim (agent: {agent}, PID: {shell_pid}, target: {target_branch})"
+                    )
+                    wp = locate_work_package(repo_root, feature_slug, normalized_wp_id)
+            else:
+                print(
+                    f"⚠️  {normalized_wp_id} is already in lane: {current_lane}. "
+                    "Workflow implement will not move it to doing. "
+                    "Pass --agent to refresh claim metadata."
+                )
 
         # Check review status
         review_status = extract_scalar(wp.frontmatter, "review_status")
@@ -1310,9 +1359,58 @@ def review(
             # Reload to get updated content
             wp = locate_work_package(repo_root, feature_slug, normalized_wp_id)
         else:
-            print(
-                f"⚠️  {normalized_wp_id} is already in lane: {current_lane}. Workflow review will not move it to doing."
-            )
+            if agent:
+                import os
+                from datetime import datetime, timezone
+
+                shell_pid = str(os.getppid())
+                current_agent = extract_scalar(wp.frontmatter, "agent") or ""
+                current_shell_pid = extract_scalar(wp.frontmatter, "shell_pid") or ""
+
+                if current_agent == agent and current_shell_pid == shell_pid:
+                    print(
+                        f"ℹ️  {normalized_wp_id} is already in lane: {current_lane} and claimed by {agent} (PID: {shell_pid})."
+                    )
+                else:
+                    updated_front = set_scalar(wp.frontmatter, "lane", "doing")
+                    updated_front = set_scalar(updated_front, "agent", agent)
+                    updated_front = set_scalar(updated_front, "shell_pid", shell_pid)
+
+                    timestamp = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+                    history_entry = f"- {timestamp} – {agent} – shell_pid={shell_pid} – lane=doing – Refreshed review claim via workflow command"
+                    updated_body = append_activity_log(wp.body, history_entry)
+                    updated_doc = build_document(updated_front, updated_body, wp.padding)
+                    wp.path.write_text(updated_doc, encoding="utf-8")
+
+                    status_repo_root = _resolve_git_repo_root_for_path(wp.path, main_repo_root)
+                    if _is_git_repo(status_repo_root):
+                        actual_wp_path = wp.path.resolve()
+                        commit_success = safe_commit(
+                            repo_path=status_repo_root,
+                            files_to_commit=[actual_wp_path],
+                            commit_message=f"chore: Refresh {normalized_wp_id} review claim [{agent}]",
+                            allow_empty=True,
+                            no_verify=True,
+                        )
+                        if not commit_success:
+                            print(
+                                f"Error: Failed to commit workflow status update for {normalized_wp_id}. "
+                                "Review claim refresh aborted."
+                            )
+                            raise typer.Exit(1)
+                    else:
+                        print("Warning: No git repository detected. Skipping status auto-commit.")
+
+                    print(
+                        f"✓ Refreshed {normalized_wp_id} review claim (agent: {agent}, PID: {shell_pid}, target: {target_branch})"
+                    )
+                    wp = locate_work_package(repo_root, feature_slug, normalized_wp_id)
+            else:
+                print(
+                    f"⚠️  {normalized_wp_id} is already in lane: {current_lane}. "
+                    "Workflow review will not move it to doing. "
+                    "Pass --agent to refresh claim metadata."
+                )
 
         # Calculate workspace path
         workspace_name = f"{feature_slug}-{normalized_wp_id}"

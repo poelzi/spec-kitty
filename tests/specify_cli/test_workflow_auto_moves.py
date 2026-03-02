@@ -10,7 +10,7 @@ from typer.testing import CliRunner
 
 from specify_cli.cli.commands.agent import workflow
 from specify_cli.frontmatter import write_frontmatter
-from specify_cli.tasks_support import extract_scalar, split_frontmatter
+from specify_cli.tasks_support import build_document, extract_scalar, set_scalar, split_frontmatter
 
 
 def write_tasks_md(feature_dir: Path, wp_id: str, subtasks: list[str], done: bool = True) -> None:
@@ -148,6 +148,70 @@ def test_workflow_review_tracks_reviewer_agent(workflow_repo: Path) -> None:
     content = wp_path.read_text(encoding="utf-8")
     frontmatter, _, _ = split_frontmatter(content)
     assert extract_scalar(frontmatter, "agent") == "claude"
+
+
+def test_workflow_implement_refreshes_claim_when_already_doing(workflow_repo: Path) -> None:
+    """Implement workflow should refresh agent metadata even when lane is already doing."""
+    feature_slug = "001-test-feature"
+    feature_dir = workflow_repo / "kitty-specs" / feature_slug
+    tasks_dir = feature_dir / "tasks"
+    tasks_dir.mkdir(parents=True)
+
+    write_tasks_md(feature_dir, "WP01", ["T001"], done=True)
+    wp_path = tasks_dir / "WP01-test.md"
+    write_wp_file(wp_path, "WP01", lane="doing")
+
+    content = wp_path.read_text(encoding="utf-8")
+    frontmatter, body, padding = split_frontmatter(content)
+    frontmatter = set_scalar(frontmatter, "agent", "old-agent")
+    frontmatter = set_scalar(frontmatter, "shell_pid", "11111")
+    wp_path.write_text(build_document(frontmatter, body, padding), encoding="utf-8")
+
+    runner = CliRunner()
+    result = runner.invoke(
+        workflow.app,
+        ["implement", "WP01", "--feature", feature_slug, "--agent", "new-agent"],
+    )
+    assert result.exit_code == 0
+
+    updated = wp_path.read_text(encoding="utf-8")
+    updated_front, updated_body, _ = split_frontmatter(updated)
+    assert extract_scalar(updated_front, "lane") == "doing"
+    assert extract_scalar(updated_front, "agent") == "new-agent"
+    assert extract_scalar(updated_front, "shell_pid") != "11111"
+    assert "Refreshed implementation claim via workflow command" in updated_body
+
+
+def test_workflow_review_refreshes_claim_when_already_doing(workflow_repo: Path) -> None:
+    """Review workflow should refresh agent metadata even when lane is already doing."""
+    feature_slug = "001-test-feature"
+    feature_dir = workflow_repo / "kitty-specs" / feature_slug
+    tasks_dir = feature_dir / "tasks"
+    tasks_dir.mkdir(parents=True)
+
+    write_tasks_md(feature_dir, "WP01", ["T001"], done=True)
+    wp_path = tasks_dir / "WP01-test.md"
+    write_wp_file(wp_path, "WP01", lane="doing")
+
+    content = wp_path.read_text(encoding="utf-8")
+    frontmatter, body, padding = split_frontmatter(content)
+    frontmatter = set_scalar(frontmatter, "agent", "old-reviewer")
+    frontmatter = set_scalar(frontmatter, "shell_pid", "22222")
+    wp_path.write_text(build_document(frontmatter, body, padding), encoding="utf-8")
+
+    runner = CliRunner()
+    result = runner.invoke(
+        workflow.app,
+        ["review", "WP01", "--feature", feature_slug, "--agent", "new-reviewer"],
+    )
+    assert result.exit_code == 0
+
+    updated = wp_path.read_text(encoding="utf-8")
+    updated_front, updated_body, _ = split_frontmatter(updated)
+    assert extract_scalar(updated_front, "lane") == "doing"
+    assert extract_scalar(updated_front, "agent") == "new-reviewer"
+    assert extract_scalar(updated_front, "shell_pid") != "22222"
+    assert "Refreshed review claim via workflow command" in updated_body
 
 
 def test_workflow_review_defaults_to_landing_merge_target(workflow_repo: Path) -> None:
