@@ -19,6 +19,7 @@ import typer
 from specify_cli.core.agent_config import AgentConfigError, load_agent_config
 from specify_cli.core.dependency_graph import build_dependency_graph
 from specify_cli.core.paths import locate_project_root
+from specify_cli.core.spec_commit_guard import prepare_specs_commit_context
 from specify_cli.git.commit_helpers import safe_commit
 from specify_cli.merge import get_merge_order, run_preflight
 from specify_cli.tasks_support import (
@@ -206,6 +207,19 @@ def _write_wp_transition(
     note: str | None = None,
     review_ref: str | None = None,
 ) -> None:
+    wp_path = Path(wp_state["path"]).resolve()
+    try:
+        commit_context = prepare_specs_commit_context(
+            main_repo_root,
+            tracked_paths=[wp_path],
+            feature_dir=wp_path.parent.parent,
+        )
+        commit_repo_root = commit_context.commit_repo_root
+    except RuntimeError:
+        # Test fixtures and some dry orchestration flows may not run inside a git repo.
+        # Keep the lane transition write-path functional and let safe_commit no-op.
+        commit_repo_root = main_repo_root
+
     to_internal_lane = _internal_lane_for_api(to_api_lane)
 
     updated_front = set_scalar(wp_state["frontmatter"], "lane", to_internal_lane)
@@ -228,14 +242,13 @@ def _write_wp_transition(
     )
     updated_body = append_activity_log(wp_state["body"], history_entry)
 
-    wp_path = wp_state["path"]
     wp_path.write_text(
         build_document(updated_front, updated_body, wp_state["padding"]),
         encoding="utf-8",
     )
 
     safe_commit(
-        repo_path=main_repo_root,
+        repo_path=commit_repo_root,
         files_to_commit=[wp_path],
         commit_message=(
             f"chore: orchestrator-api transition {feature_slug}/{wp_state['wp_id']} "
@@ -765,8 +778,18 @@ def append_history(
 
     wp_file.write_text(build_document(frontmatter, new_body, padding), encoding="utf-8")
 
+    try:
+        commit_context = prepare_specs_commit_context(
+            main_repo_root,
+            tracked_paths=[wp_file],
+            feature_dir=wp_file.parent.parent,
+        )
+        commit_repo_root = commit_context.commit_repo_root
+    except RuntimeError:
+        commit_repo_root = main_repo_root
+
     safe_commit(
-        repo_path=main_repo_root,
+        repo_path=commit_repo_root,
         files_to_commit=[wp_file],
         commit_message=f"hist: append activity log entry for {feature}/{wp}",
         allow_empty=True,

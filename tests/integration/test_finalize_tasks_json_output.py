@@ -480,3 +480,142 @@ def test_json_output_schema_complete(tmp_path):
     assert isinstance(output["files_committed"], list)
     assert isinstance(output["updated_wp_count"], int)
     assert isinstance(output["tasks_dir"], str)
+
+
+def test_finalize_tasks_commits_inside_specs_submodule(tmp_path):
+    """finalize-tasks should commit inside kitty-specs submodule repo.
+
+    Reproduces the pathspec failure seen when the parent repository tries to
+    `git add` files under a nested `kitty-specs` git repository.
+    """
+
+    def init_repo(path: Path) -> None:
+        path.mkdir(parents=True, exist_ok=True)
+        subprocess.run(["git", "init", "-b", "main"], cwd=path, check=True, capture_output=True)
+        subprocess.run(["git", "config", "user.name", "Test"], cwd=path, check=True, capture_output=True)
+        subprocess.run(["git", "config", "user.email", "test@test.com"], cwd=path, check=True, capture_output=True)
+        (path / "README.md").write_text("# Repo\n", encoding="utf-8")
+        subprocess.run(["git", "add", "README.md"], cwd=path, check=True, capture_output=True)
+        subprocess.run(["git", "commit", "-m", "Initial"], cwd=path, check=True, capture_output=True)
+
+    repo = tmp_path / "repo"
+    specs_origin = tmp_path / "specs-origin"
+    init_repo(repo)
+    init_repo(specs_origin)
+
+    # Add local specs repository as git submodule at kitty-specs/
+    subprocess.run(
+        [
+            "git",
+            "-c",
+            "protocol.file.allow=always",
+            "submodule",
+            "add",
+            str(specs_origin),
+            "kitty-specs",
+        ],
+        cwd=repo,
+        check=True,
+        capture_output=True,
+    )
+    subprocess.run(["git", "commit", "-m", "Add specs submodule"], cwd=repo, check=True, capture_output=True)
+
+    # Minimal project config in parent repo
+    kittify = repo / ".kittify"
+    kittify.mkdir(exist_ok=True)
+    (kittify / "config.yaml").write_text(
+        "vcs:\n"
+        "  type: git\n"
+        "agents:\n"
+        "  available:\n"
+        "    - claude\n",
+        encoding="utf-8",
+    )
+    (kittify / "metadata.yaml").write_text(
+        "spec_kitty:\n"
+        "  version: 0.16.0\n",
+        encoding="utf-8",
+    )
+
+    specs_repo = repo / "kitty-specs"
+    subprocess.run(["git", "checkout", "main"], cwd=specs_repo, check=True, capture_output=True)
+
+    feature_dir = specs_repo / "001-submodule-feature"
+    tasks_dir = feature_dir / "tasks"
+    tasks_dir.mkdir(parents=True)
+
+    (feature_dir / "meta.json").write_text(
+        json.dumps(
+            {
+                "feature_number": "001",
+                "slug": "001-submodule-feature",
+                "upstream_branch": "main",
+                "target_branch": "main",
+                "vcs": "git",
+            },
+            indent=2,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    (feature_dir / "tasks.md").write_text(
+        "# Tasks\n\n"
+        "## Work Package WP01 - Setup\n\n"
+        "Depends on: none\n\n"
+        "## Work Package WP02 - Implementation\n\n"
+        "Depends on WP01\n",
+        encoding="utf-8",
+    )
+
+    (tasks_dir / "WP01-setup.md").write_text(
+        "---\n"
+        "work_package_id: WP01\n"
+        "lane: planned\n"
+        "---\n\n"
+        "# WP01\n",
+        encoding="utf-8",
+    )
+    (tasks_dir / "WP02-impl.md").write_text(
+        "---\n"
+        "work_package_id: WP02\n"
+        "lane: planned\n"
+        "---\n\n"
+        "# WP02\n",
+        encoding="utf-8",
+    )
+
+    subprocess.run(["git", "add", "."], cwd=specs_repo, check=True, capture_output=True)
+    subprocess.run(["git", "commit", "-m", "Add feature files"], cwd=specs_repo, check=True, capture_output=True)
+
+    main_head_before = subprocess.run(
+        ["git", "rev-parse", "HEAD"],
+        cwd=repo,
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.strip()
+
+    result = run_cli(repo, "agent", "feature", "finalize-tasks", "--json")
+    assert result.returncode == 0, f"Failed: {result.stderr}"
+    output = json.loads(result.stdout)
+
+    specs_head_after = subprocess.run(
+        ["git", "rev-parse", "HEAD"],
+        cwd=specs_repo,
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.strip()
+    main_head_after = subprocess.run(
+        ["git", "rev-parse", "HEAD"],
+        cwd=repo,
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.strip()
+
+    assert output["commit_created"] is True
+    assert output["commit_hash"] == specs_head_after
+    assert main_head_after == main_head_before
+    assert any(path.endswith("001-submodule-feature/tasks.md") for path in output["files_committed"])
