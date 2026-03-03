@@ -89,7 +89,12 @@ def _resolve_feature(feature: Optional[str]) -> tuple[Path, str]:
 
     try:
         feature_slug = (
-            feature or detect_feature_slug(repo_root, cwd=Path.cwd())
+            feature
+            or detect_feature_slug(
+                repo_root,
+                cwd=Path.cwd(),
+                allow_latest_incomplete_fallback=False,
+            )
         ).strip()
     except (FeatureDetectionError, Exception) as exc:
         print(f"Error: Could not detect feature - {exc}")

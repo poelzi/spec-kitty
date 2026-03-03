@@ -840,6 +840,31 @@ def test_detect_fallback_respects_explicit_feature(tmp_path: Path):
     assert ctx.detection_method == "explicit"
 
 
+def test_detect_can_disable_latest_incomplete_fallback(tmp_path: Path):
+    """When fallback is disabled, ambiguous detection must fail."""
+    repo_root = tmp_path / "repo"
+    kitty_specs = repo_root / "kitty-specs"
+    kitty_specs.mkdir(parents=True)
+
+    for slug, lane in [("018-alpha", "doing"), ("019-beta", "doing")]:
+        tasks_dir = kitty_specs / slug / "tasks"
+        tasks_dir.mkdir(parents=True)
+        (tasks_dir / "WP01.md").write_text(
+            f"---\nwork_package_id: WP01\ntitle: Test\nlane: {lane}\n---\n",
+            encoding="utf-8",
+        )
+
+    with patch("subprocess.run") as mock_run:
+        mock_run.side_effect = subprocess.CalledProcessError(1, "git")
+        with pytest.raises(MultipleFeaturesError):
+            detect_feature(
+                repo_root,
+                cwd=repo_root,
+                mode="strict",
+                allow_latest_incomplete_fallback=False,
+            )
+
+
 def test_detect_fallback_error_when_all_complete(tmp_path: Path):
     """Test Priority 7: error when all features complete (no fallback available)."""
     repo_root = tmp_path / "repo"

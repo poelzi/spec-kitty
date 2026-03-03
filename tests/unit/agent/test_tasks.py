@@ -1196,6 +1196,44 @@ class TestFindFeatureSlug:
         with pytest.raises(Exit):
             _find_feature_slug()
 
+    @patch("specify_cli.cli.commands.agent.tasks.detect_feature_slug")
+    @patch("specify_cli.cli.commands.agent.tasks.locate_project_root")
+    @patch("specify_cli.cli.commands.agent.tasks.Path.cwd")
+    def test_find_disables_latest_incomplete_fallback(
+        self, mock_cwd: Mock, mock_root: Mock, mock_detect: Mock, tmp_path: Path
+    ):
+        """Mutating/agent task flows should never fallback to latest incomplete feature."""
+        from specify_cli.cli.commands.agent.tasks import _find_feature_slug
+
+        mock_cwd.return_value = tmp_path
+        mock_root.return_value = tmp_path
+        mock_detect.return_value = "018-demo"
+
+        result = _find_feature_slug()
+
+        assert result == "018-demo"
+        _, kwargs = mock_detect.call_args
+        assert kwargs["allow_latest_incomplete_fallback"] is False
+
+    @patch("specify_cli.cli.commands.agent.tasks.detect_feature_slug")
+    @patch("specify_cli.cli.commands.agent.tasks.locate_project_root")
+    @patch("specify_cli.cli.commands.agent.tasks.Path.cwd")
+    def test_find_passes_numeric_feature_to_detector(
+        self, mock_cwd: Mock, mock_root: Mock, mock_detect: Mock, tmp_path: Path
+    ):
+        """Short numeric --feature values should pass through for centralized resolution."""
+        from specify_cli.cli.commands.agent.tasks import _find_feature_slug
+
+        mock_cwd.return_value = tmp_path
+        mock_root.return_value = tmp_path
+        mock_detect.return_value = "018-deterministic-workflow-runner-mvp"
+
+        result = _find_feature_slug(explicit_feature="018")
+
+        assert result == "018-deterministic-workflow-runner-mvp"
+        _, kwargs = mock_detect.call_args
+        assert kwargs["explicit_feature"] == "018"
+
 
 class TestListDependents:
     """Tests for list-dependents command."""

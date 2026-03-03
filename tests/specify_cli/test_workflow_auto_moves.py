@@ -280,3 +280,25 @@ def test_workflow_review_allows_upstream_merge_target(workflow_repo: Path) -> No
     prompt_content = prompt_file.read_text(encoding="utf-8")
 
     assert "Merge target mode: upstream (branch: main)" in prompt_content
+
+
+def test_workflow_find_feature_slug_disables_latest_incomplete_fallback(
+    workflow_repo: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Workflow feature detection should not auto-fallback to latest incomplete feature."""
+    captured: dict[str, object] = {}
+
+    def fake_detect_feature_slug(repo_root: Path, **kwargs):
+        captured.update(kwargs)
+        return "018-deterministic-workflow-runner-mvp"
+
+    monkeypatch.setattr(
+        "specify_cli.cli.commands.agent.workflow.detect_feature_slug",
+        fake_detect_feature_slug,
+    )
+
+    slug = workflow._find_feature_slug(explicit_feature="018")
+
+    assert slug == "018-deterministic-workflow-runner-mvp"
+    assert captured["explicit_feature"] == "018"
+    assert captured["allow_latest_incomplete_fallback"] is False

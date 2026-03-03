@@ -149,10 +149,18 @@ def _find_feature_slug(explicit_feature: str | None = None) -> str:
 
     try:
         return detect_feature_slug(
-            repo_root, explicit_feature=explicit_feature, cwd=cwd, mode="strict"
+            repo_root,
+            explicit_feature=explicit_feature,
+            cwd=cwd,
+            mode="strict",
+            allow_latest_incomplete_fallback=False,
         )
     except FeatureDetectionError as e:
         console.print(f"[red]Error:[/red] {e}")
+        console.print(
+            "[yellow]Hint:[/yellow] pass [bold]--feature <feature-slug>[/bold] "
+            "(full slug preferred; unique numeric shorthand like [bold]--feature 018[/bold] is supported)."
+        )
         raise typer.Exit(1)
 
 
