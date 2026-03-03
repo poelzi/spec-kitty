@@ -54,6 +54,8 @@ spec-kitty agent workflow implement $ARGUMENTS --agent __AGENT__
 
 **CRITICAL**: Use the prefilled `--agent __AGENT__` value to track who is implementing!
 
+**CRITICAL**: Pass `--feature <feature-slug>` when multiple features are active to avoid cross-feature status updates. Prefer full slug; unique numeric shorthand like `--feature 018` is supported.
+
 ### Step 1: Navigate to Your Worktree
 
 ```bash

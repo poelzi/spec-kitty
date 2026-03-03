@@ -36,6 +36,7 @@ pwd
 ```bash
 spec-kitty agent workflow implement WP## --agent __AGENT__
 ```
+Always pass `--feature <feature-slug>` when working in repos with multiple active features to avoid cross-feature updates. Full slug is preferred; unique numeric shorthand (for example `--feature 018`) is also supported.
 This displays the full WP prompt with detailed requirements and shows:
 ```
 WHEN YOU'RE DONE:

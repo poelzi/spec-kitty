@@ -57,6 +57,8 @@ Documentation implementation follows the standard workspace-per-WP model:
 - **Quality validated** - Check accessibility, links, build before merging
 - **Release prepared (optional)** - Draft `release.md` when publish is in scope
 
+When running lane/status commands, pass `--feature <feature-slug>` to avoid cross-feature updates in multi-feature repos. Prefer full slug; unique numeric shorthand like `--feature 018` is supported.
+
 ---
 
 ## Per-Work-Package Implementation
