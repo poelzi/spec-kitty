@@ -30,6 +30,10 @@ from specify_cli.core.paths import (
     is_worktree_context,
     locate_project_root,
 )
+from specify_cli.core.spec_commit_guard import (
+    prepare_specs_commit_context,
+    to_repo_relative_path,
+)
 from specify_cli.mission import get_feature_mission_key
 
 
@@ -1444,14 +1448,14 @@ def mark_status(
         bool,
         typer.Option(
             "--auto-commit/--no-auto-commit",
-            help="Automatically commit tasks.md changes to target branch",
+            help="Automatically commit status changes to target branch",
         ),
     ] = True,
     json_output: Annotated[
         bool, typer.Option("--json", help="Output JSON format")
     ] = False,
 ) -> None:
-    """Update task checkbox status in tasks.md for one or more tasks.
+    """Update task checkbox status in tasks.md or WP files.
 
     Accepts MULTIPLE task IDs separated by spaces. All tasks are updated
     in a single operation with one commit.
@@ -1495,46 +1499,99 @@ def mark_status(
         )
         feature_dir = main_repo_root / "kitty-specs" / feature_slug
         tasks_md = feature_dir / "tasks.md"
-
-        if not tasks_md.exists():
-            _output_error(json_output, f"tasks.md not found: {tasks_md}")
-            raise typer.Exit(1)
-
-        # Read tasks.md content
-        content = tasks_md.read_text(encoding="utf-8")
-        lines = content.split("\n")
         new_checkbox = "[x]" if status == "done" else "[ ]"
+
+        def _mark_task_in_lines(target_lines: list[str], task_id: str) -> bool:
+            for i, line in enumerate(target_lines):
+                # Match checkbox lines with this task ID
+                if re.search(rf"[-*]\s*\[[ x]\]\s*{re.escape(task_id)}\b", line):
+                    # Replace just the checkbox marker, keep original bullet indentation
+                    target_lines[i] = re.sub(
+                        r"([-*]\s*)\[[ x]\]",
+                        lambda match: f"{match.group(1)}{new_checkbox}",
+                        line,
+                        count=1,
+                    )
+                    return True
+            return False
 
         # Track which tasks were updated and which weren't found
         updated_tasks = []
         not_found_tasks = []
+        updated_files: list[Path] = []
 
-        # Update all requested tasks in a single pass
-        for task_id in task_ids:
-            task_found = False
-            for i, line in enumerate(lines):
-                # Match checkbox lines with this task ID
-                if re.search(rf"-\s*\[[ x]\]\s*{re.escape(task_id)}\b", line):
-                    # Replace the checkbox
-                    lines[i] = re.sub(r"-\s*\[[ x]\]", f"- {new_checkbox}", line)
+        if tasks_md.exists():
+            # Primary path: update checklist items in tasks.md
+            lines = tasks_md.read_text(encoding="utf-8").split("\n")
+
+            # Update all requested tasks in a single pass
+            for task_id in task_ids:
+                if _mark_task_in_lines(lines, task_id):
                     updated_tasks.append(task_id)
-                    task_found = True
-                    break
+                else:
+                    not_found_tasks.append(task_id)
 
-            if not task_found:
-                not_found_tasks.append(task_id)
+            # Fail if no tasks were updated
+            if not updated_tasks:
+                _output_error(
+                    json_output,
+                    f"No task IDs found in tasks.md: {', '.join(not_found_tasks)}",
+                )
+                raise typer.Exit(1)
 
-        # Fail if no tasks were updated
-        if not updated_tasks:
-            _output_error(
-                json_output,
-                f"No task IDs found in tasks.md: {', '.join(not_found_tasks)}",
+            # Write updated tasks.md content
+            tasks_md.write_text("\n".join(lines), encoding="utf-8")
+            updated_files = [tasks_md]
+        else:
+            # Compatibility path: support per-WP files for features that no longer
+            # maintain a top-level tasks.md checklist.
+            tasks_dir = feature_dir / "tasks"
+            if not tasks_dir.exists():
+                _output_error(
+                    json_output,
+                    f"Neither tasks.md nor tasks/ directory found under: {feature_dir}",
+                )
+                raise typer.Exit(1)
+
+            wp_files = sorted(
+                p for p in tasks_dir.glob("WP*.md") if p.name.lower() != "readme.md"
             )
-            raise typer.Exit(1)
+            if not wp_files:
+                _output_error(
+                    json_output,
+                    f"No WP task files found in: {tasks_dir}",
+                )
+                raise typer.Exit(1)
 
-        # Write updated content (single write for all changes)
-        updated_content = "\n".join(lines)
-        tasks_md.write_text(updated_content, encoding="utf-8")
+            file_lines: dict[Path, list[str]] = {
+                wp_file: wp_file.read_text(encoding="utf-8").split("\n")
+                for wp_file in wp_files
+            }
+            changed_files: set[Path] = set()
+
+            for task_id in task_ids:
+                task_found = False
+                for wp_file in wp_files:
+                    lines = file_lines[wp_file]
+                    if _mark_task_in_lines(lines, task_id):
+                        updated_tasks.append(task_id)
+                        changed_files.add(wp_file)
+                        task_found = True
+                        break
+
+                if not task_found:
+                    not_found_tasks.append(task_id)
+
+            if not updated_tasks:
+                _output_error(
+                    json_output,
+                    f"No task IDs found in WP task files: {', '.join(not_found_tasks)}",
+                )
+                raise typer.Exit(1)
+
+            for wp_file in sorted(changed_files):
+                wp_file.write_text("\n".join(file_lines[wp_file]), encoding="utf-8")
+                updated_files.append(wp_file)
 
         # Auto-commit to TARGET branch (detects from feature meta.json)
         if auto_commit:
@@ -1554,13 +1611,22 @@ def mark_status(
                 commit_msg = f"chore: Mark {len(updated_tasks)} subtasks as {status} on spec {spec_number}"
 
             try:
-                actual_tasks_path = tasks_md.resolve()
+                commit_context = prepare_specs_commit_context(
+                    main_repo_root,
+                    tracked_paths=updated_files,
+                    feature_dir=feature_dir,
+                    fallback_branch=target_branch,
+                )
+                commit_repo_root = commit_context.commit_repo_root
+                relative_files = [
+                    to_repo_relative_path(path, commit_repo_root)
+                    for path in updated_files
+                ]
 
-                # Stage the file first, then commit
-                # Use -u to only update tracked files (bypasses .gitignore check)
+                # Stage updated tracked files first, then commit.
                 add_result = subprocess.run(
-                    ["git", "add", "-u", str(actual_tasks_path)],
-                    cwd=main_repo_root,
+                    ["git", "add", "-u", "--", *relative_files],
+                    cwd=commit_repo_root,
                     capture_output=True,
                     text=True,
                     check=False,
@@ -1575,7 +1641,7 @@ def mark_status(
                     # Commit the staged file
                     commit_result = subprocess.run(
                         ["git", "commit", "--no-verify", "-m", commit_msg],
-                        cwd=main_repo_root,
+                        cwd=commit_repo_root,
                         capture_output=True,
                         text=True,
                         check=False,
@@ -1584,7 +1650,7 @@ def mark_status(
                     if commit_result.returncode == 0:
                         if not json_output:
                             console.print(
-                                f"[cyan]→ Committed subtask changes to {target_branch} branch[/cyan]"
+                                f"[cyan]→ Committed subtask changes to {commit_context.target_branch} branch[/cyan]"
                             )
                     elif (
                         "nothing to commit" not in commit_result.stdout
@@ -1608,6 +1674,7 @@ def mark_status(
             "not_found": not_found_tasks,
             "status": status,
             "count": len(updated_tasks),
+            "files_updated": [str(path) for path in updated_files],
         }
 
         # Output result

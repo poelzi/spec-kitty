@@ -503,6 +503,85 @@ class TestMarkStatus:
         assert output["result"] == "success"
         assert output["status"] == "done"
 
+    @patch("specify_cli.cli.commands.agent.tasks._ensure_target_branch_checked_out")
+    @patch("specify_cli.cli.commands.agent.tasks.locate_project_root")
+    @patch("specify_cli.cli.commands.agent.tasks._find_feature_slug")
+    def test_mark_status_falls_back_to_wp_files_when_tasks_md_missing(
+        self, mock_slug: Mock, mock_root: Mock, mock_ensure: Mock, tmp_path: Path
+    ):
+        """Should update checkbox in WP files when tasks.md is absent."""
+        mock_root.return_value = tmp_path
+        mock_slug.return_value = "008-test"
+        mock_ensure.return_value = (tmp_path, "main")
+
+        tasks_dir = tmp_path / "kitty-specs" / "008-test" / "tasks"
+        tasks_dir.mkdir(parents=True, exist_ok=True)
+        wp_file = tasks_dir / "WP01-test.md"
+        wp_file.write_text(
+            "---\n"
+            "work_package_id: WP01\n"
+            "lane: planned\n"
+            "---\n\n"
+            "# WP01\n\n"
+            "## Subtasks\n"
+            "- [ ] T001 Initial setup\n",
+            encoding="utf-8",
+        )
+
+        result = runner.invoke(
+            app,
+            [
+                "mark-status",
+                "T001",
+                "--status",
+                "done",
+                "--json",
+                "--no-auto-commit",
+            ],
+        )
+
+        assert result.exit_code == 0
+        output = json.loads(result.stdout)
+        assert output["result"] == "success"
+        assert output["updated"] == ["T001"]
+        assert str(wp_file) in output["files_updated"]
+        assert "- [x] T001 Initial setup" in wp_file.read_text(encoding="utf-8")
+
+    @patch("specify_cli.cli.commands.agent.tasks._ensure_target_branch_checked_out")
+    @patch("specify_cli.cli.commands.agent.tasks.locate_project_root")
+    @patch("specify_cli.cli.commands.agent.tasks._find_feature_slug")
+    def test_mark_status_reports_missing_task_in_wp_files(
+        self, mock_slug: Mock, mock_root: Mock, mock_ensure: Mock, tmp_path: Path
+    ):
+        """Should return clear error when task IDs are absent from WP files."""
+        mock_root.return_value = tmp_path
+        mock_slug.return_value = "008-test"
+        mock_ensure.return_value = (tmp_path, "main")
+
+        tasks_dir = tmp_path / "kitty-specs" / "008-test" / "tasks"
+        tasks_dir.mkdir(parents=True, exist_ok=True)
+        (tasks_dir / "WP01-test.md").write_text(
+            "## Subtasks\n- [ ] T001 Existing subtask\n",
+            encoding="utf-8",
+        )
+
+        result = runner.invoke(
+            app,
+            [
+                "mark-status",
+                "T999",
+                "--status",
+                "done",
+                "--json",
+                "--no-auto-commit",
+            ],
+        )
+
+        assert result.exit_code == 1
+        first_line = result.stdout.strip().split("\n")[0]
+        output = json.loads(first_line)
+        assert "No task IDs found in WP task files" in output["error"]
+
     @patch("specify_cli.cli.commands.agent.tasks.locate_project_root")
     def test_mark_status_no_project_root(self, mock_root: Mock):
         """Should error when project root not found."""
