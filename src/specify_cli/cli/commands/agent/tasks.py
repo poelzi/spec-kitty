@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 import re
 import subprocess
 from datetime import datetime, timezone
@@ -203,6 +204,29 @@ def _detect_reviewer_name() -> str:
         return result.stdout.strip() or "unknown"
     except (subprocess.CalledProcessError, FileNotFoundError):
         return "unknown"
+
+
+def _detect_runtime_agent_name() -> str:
+    """Best-effort detection for agent identity in CLI-driven lane claims."""
+    for key in ("SPEC_KITTY_AGENT", "AGENT", "USER", "LOGNAME"):
+        value = os.environ.get(key, "").strip()
+        if value:
+            return value
+
+    try:
+        result = subprocess.run(
+            ["git", "config", "user.name"],
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+        detected = result.stdout.strip()
+        if detected:
+            return detected
+    except (subprocess.CalledProcessError, FileNotFoundError):
+        pass
+
+    return "unknown"
 
 
 def _resolve_review_feedback_path(path: Path) -> Path:
@@ -1095,6 +1119,7 @@ def move_task(
         wp = locate_work_package(repo_root, feature_slug, task_id)
         old_lane = wp.current_lane
         current_review_status = extract_scalar(wp.frontmatter, "review_status") or ""
+        current_assignee = extract_scalar(wp.frontmatter, "assignee") or ""
 
         resolved_review_feedback_file: Optional[Path] = None
         if review_feedback_file is not None:
@@ -1107,7 +1132,15 @@ def move_task(
         # AGENT OWNERSHIP CHECK: Warn if agent doesn't match WP's current agent
         # This helps prevent agents from accidentally modifying WPs they don't own
         current_agent = extract_scalar(wp.frontmatter, "agent")
-        if current_agent and agent and current_agent != agent and not force:
+        effective_agent = (
+            (agent or "").strip()
+            or (assignee or "").strip()
+            or (current_agent or "").strip()
+        )
+        if target_lane == "doing" and not effective_agent:
+            effective_agent = _detect_runtime_agent_name()
+
+        if current_agent and effective_agent and current_agent != effective_agent and not force:
             if not json_output:
                 console.print()
                 console.print("[bold red]⚠️  AGENT OWNERSHIP WARNING[/bold red]")
@@ -1115,7 +1148,7 @@ def move_task(
                     f"   {task_id} is currently assigned to: [cyan]{current_agent}[/cyan]"
                 )
                 console.print(
-                    f"   You are trying to move it as: [yellow]{agent}[/yellow]"
+                    f"   You are trying to move it as: [yellow]{effective_agent}[/yellow]"
                 )
                 console.print()
                 console.print(
@@ -1125,7 +1158,7 @@ def move_task(
                 console.print()
             _output_error(
                 json_output,
-                f"Agent mismatch: {task_id} is assigned to '{current_agent}', not '{agent}'. Use --force to override.",
+                f"Agent mismatch: {task_id} is assigned to '{current_agent}', not '{effective_agent}'. Use --force to override.",
             )
             raise typer.Exit(1)
 
@@ -1217,13 +1250,23 @@ def move_task(
         if assignee:
             updated_front = set_scalar(updated_front, "assignee", assignee)
 
-        # Update agent if provided
-        if agent:
+        # Ensure active claims (lane=doing) always include ownership metadata.
+        if target_lane == "doing":
+            effective_assignee = (assignee or "").strip() or current_assignee or effective_agent
+            if effective_assignee:
+                updated_front = set_scalar(updated_front, "assignee", effective_assignee)
+            if effective_agent:
+                updated_front = set_scalar(updated_front, "agent", effective_agent)
+        elif agent:
             updated_front = set_scalar(updated_front, "agent", agent)
 
-        # Update shell_pid if provided
-        if shell_pid:
-            updated_front = set_scalar(updated_front, "shell_pid", shell_pid)
+        # Ensure lane=doing records the active shell PID unless explicitly provided.
+        effective_shell_pid = shell_pid
+        if target_lane == "doing" and not effective_shell_pid:
+            effective_shell_pid = str(os.getppid())
+
+        if effective_shell_pid:
+            updated_front = set_scalar(updated_front, "shell_pid", effective_shell_pid)
 
         # Handle review feedback insertion for deterministic planned rollbacks
         updated_body = wp.body
@@ -1277,8 +1320,13 @@ def move_task(
             updated_front = set_scalar(updated_front, "review_status", "acknowledged")
 
         # Build history entry
-        agent_name = agent or extract_scalar(updated_front, "agent") or "unknown"
-        shell_pid_val = shell_pid or extract_scalar(updated_front, "shell_pid") or ""
+        agent_name = (
+            effective_agent
+            or extract_scalar(updated_front, "agent")
+            or _detect_runtime_agent_name()
+            or "unknown"
+        )
+        shell_pid_val = effective_shell_pid or extract_scalar(updated_front, "shell_pid") or ""
         note_text = note or f"Moved to {target_lane}"
 
         shell_part = f"shell_pid={shell_pid_val} – " if shell_pid_val else ""

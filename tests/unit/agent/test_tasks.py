@@ -136,6 +136,42 @@ class TestMoveTask:
         assert 'agent: "test-agent"' in updated_content
         assert 'shell_pid: "99999"' in updated_content
 
+    @patch("specify_cli.cli.commands.agent.tasks._ensure_target_branch_checked_out")
+    @patch("specify_cli.cli.commands.agent.tasks.locate_project_root")
+    @patch("specify_cli.cli.commands.agent.tasks._find_feature_slug")
+    @patch("specify_cli.cli.commands.agent.tasks._detect_runtime_agent_name")
+    @patch("os.getppid")
+    def test_move_task_to_doing_autofills_claim_metadata(
+        self,
+        mock_getppid: Mock,
+        mock_detect_agent: Mock,
+        mock_slug: Mock,
+        mock_root: Mock,
+        mock_ensure: Mock,
+        mock_task_file: Path,
+    ):
+        """Moving to doing should auto-fill agent/assignee/shell_pid when absent."""
+        repo_root = mock_task_file.parent.parent.parent.parent
+        mock_root.return_value = repo_root
+        mock_slug.return_value = "008-test-feature"
+        mock_ensure.return_value = (repo_root, "main")
+        mock_detect_agent.return_value = "codex"
+        mock_getppid.return_value = 42424
+
+        result = runner.invoke(
+            app,
+            ["move-task", "WP01", "--to", "doing", "--no-auto-commit", "--json"],
+        )
+
+        assert result.exit_code == 0
+        updated_content = mock_task_file.read_text(encoding="utf-8")
+        assert 'lane: "doing"' in updated_content
+        assert 'agent: "codex"' in updated_content
+        assert 'assignee: "codex"' in updated_content
+        assert 'shell_pid: "42424"' in updated_content
+        assert "shell_pid=42424" in updated_content
+        assert "lane=doing" in updated_content
+
     @patch("specify_cli.cli.commands.agent.tasks.locate_project_root")
     def test_move_task_invalid_lane(self, mock_root: Mock, mock_task_file: Path):
         """Should reject invalid lane values."""
