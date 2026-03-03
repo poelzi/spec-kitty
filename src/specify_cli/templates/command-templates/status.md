@@ -25,11 +25,15 @@ Run the CLI command to display the status board:
 spec-kitty agent tasks status
 ```
 
+In repositories with multiple active features, prefer passing `--feature` explicitly to avoid cross-feature confusion.
+
 To specify a feature explicitly:
 
 ```bash
 spec-kitty agent tasks status --feature 012-documentation-mission
 ```
+
+Use the full feature slug when possible. Unique numeric shorthand is also supported (for example, `--feature 012`).
 
 The command displays a rich kanban board with:
 - Progress bar showing completion percentage
