@@ -364,17 +364,25 @@ class TestSetupPlanCommand:
     """Tests for setup-plan command."""
 
     @patch("specify_cli.cli.commands.agent.feature.locate_project_root")
+    @patch("specify_cli.cli.commands.agent.feature.get_main_repo_root")
     @patch("specify_cli.cli.commands.agent.feature._find_feature_directory")
     @patch("specify_cli.cli.commands.agent.feature._resolve_planning_branch", return_value="main")
     @patch("specify_cli.cli.commands.agent.feature._ensure_branch_checked_out")
     @patch("specify_cli.cli.commands.agent.feature._commit_to_branch")
     def test_scaffolds_plan_template_json(
-        self, mock_commit: Mock, mock_ensure: Mock, mock_resolve: Mock,
-        mock_find: Mock, mock_locate: Mock, tmp_path: Path
+        self,
+        mock_commit: Mock,
+        mock_ensure: Mock,
+        mock_resolve: Mock,
+        mock_find: Mock,
+        mock_main_root: Mock,
+        mock_locate: Mock,
+        tmp_path: Path,
     ):
         """Should scaffold plan template and output JSON format."""
         # Setup
         mock_locate.return_value = tmp_path
+        mock_main_root.return_value = tmp_path
         feature_dir = tmp_path / "kitty-specs" / "001-test"
         feature_dir.mkdir(parents=True)
         mock_find.return_value = feature_dir
@@ -404,17 +412,25 @@ class TestSetupPlanCommand:
         mock_commit.assert_called_once()
 
     @patch("specify_cli.cli.commands.agent.feature.locate_project_root")
+    @patch("specify_cli.cli.commands.agent.feature.get_main_repo_root")
     @patch("specify_cli.cli.commands.agent.feature._find_feature_directory")
     @patch("specify_cli.cli.commands.agent.feature._resolve_planning_branch", return_value="main")
     @patch("specify_cli.cli.commands.agent.feature._ensure_branch_checked_out")
     @patch("specify_cli.cli.commands.agent.feature._commit_to_branch")
     def test_scaffolds_plan_template_human(
-        self, mock_commit: Mock, mock_ensure: Mock, mock_resolve: Mock,
-        mock_find: Mock, mock_locate: Mock, tmp_path: Path
+        self,
+        mock_commit: Mock,
+        mock_ensure: Mock,
+        mock_resolve: Mock,
+        mock_find: Mock,
+        mock_main_root: Mock,
+        mock_locate: Mock,
+        tmp_path: Path,
     ):
         """Should scaffold plan template and output human-readable format."""
         # Setup
         mock_locate.return_value = tmp_path
+        mock_main_root.return_value = tmp_path
         feature_dir = tmp_path / "kitty-specs" / "001-test"
         feature_dir.mkdir(parents=True)
         mock_find.return_value = feature_dir
@@ -433,17 +449,25 @@ class TestSetupPlanCommand:
         assert "Plan scaffolded:" in result.stdout
 
     @patch("specify_cli.cli.commands.agent.feature.locate_project_root")
+    @patch("specify_cli.cli.commands.agent.feature.get_main_repo_root")
     @patch("specify_cli.cli.commands.agent.feature._find_feature_directory")
     @patch("specify_cli.cli.commands.agent.feature._resolve_planning_branch", return_value="main")
     @patch("specify_cli.cli.commands.agent.feature._ensure_branch_checked_out")
     @patch("specify_cli.cli.commands.agent.feature.files")
     def test_errors_when_template_not_found(
-        self, mock_files: Mock, mock_ensure: Mock, mock_resolve: Mock,
-        mock_find: Mock, mock_locate: Mock, tmp_path: Path
+        self,
+        mock_files: Mock,
+        mock_ensure: Mock,
+        mock_resolve: Mock,
+        mock_find: Mock,
+        mock_main_root: Mock,
+        mock_locate: Mock,
+        tmp_path: Path,
     ):
         """Should return error when plan template not found."""
         # Setup
         mock_locate.return_value = tmp_path
+        mock_main_root.return_value = tmp_path
         feature_dir = tmp_path / "kitty-specs" / "001-test"
         feature_dir.mkdir(parents=True)
         mock_find.return_value = feature_dir
@@ -479,6 +503,44 @@ class TestSetupPlanCommand:
         first_line = result.stdout.strip().split('\n')[0]
         output = json.loads(first_line)
         assert "error" in output
+
+    @patch("specify_cli.cli.commands.agent.feature.locate_project_root")
+    @patch("specify_cli.cli.commands.agent.feature.get_main_repo_root")
+    @patch("specify_cli.cli.commands.agent.feature._find_feature_directory")
+    @patch("specify_cli.cli.commands.agent.feature._resolve_planning_branch", return_value="main")
+    @patch("specify_cli.cli.commands.agent.feature._ensure_branch_checked_out")
+    @patch("specify_cli.cli.commands.agent.feature._commit_to_branch")
+    def test_setup_plan_commits_via_main_repo_root(
+        self,
+        mock_commit: Mock,
+        mock_ensure: Mock,
+        mock_resolve: Mock,
+        mock_find: Mock,
+        mock_main_root: Mock,
+        mock_locate: Mock,
+        tmp_path: Path,
+    ):
+        """When run from a worktree, setup-plan should commit via main repo root."""
+        main_repo = tmp_path / "main-repo"
+        worktree_repo = main_repo / ".worktrees" / "feature-wt"
+        feature_dir = main_repo / "kitty-specs" / "020-test-feature"
+
+        feature_dir.mkdir(parents=True)
+        (main_repo / ".kittify" / "templates").mkdir(parents=True)
+        (main_repo / ".kittify" / "templates" / "plan-template.md").write_text(
+            "# Plan Template", encoding="utf-8"
+        )
+
+        mock_locate.return_value = worktree_repo
+        mock_main_root.return_value = main_repo
+        mock_find.return_value = feature_dir
+
+        result = runner.invoke(app, ["setup-plan", "--json"])
+
+        assert result.exit_code == 0
+        mock_main_root.assert_called_once_with(worktree_repo)
+        _, commit_args, _ = mock_commit.mock_calls[0]
+        assert commit_args[3] == main_repo
 
 
 class TestFindFeatureDirectory:

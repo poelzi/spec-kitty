@@ -24,7 +24,7 @@ from specify_cli.core.dependency_graph import (
     validate_dependencies,
 )
 from specify_cli.core.git_ops import get_current_branch, is_git_repo, run_command
-from specify_cli.core.paths import is_worktree_context, locate_project_root
+from specify_cli.core.paths import get_main_repo_root, is_worktree_context, locate_project_root
 from specify_cli.core.spec_commit_guard import (
     SpecCommitContext,
     ensure_branch_checked_out,
@@ -599,18 +599,24 @@ def setup_plan(
                 console.print(f"[red]Error:[/red] {error_msg}")
             raise typer.Exit(1)
 
+        # Planning artifacts must be written/committed from the primary repo,
+        # not from a feature worktree checkout where branch checkout can fail.
+        main_repo_root = get_main_repo_root(repo_root)
+
         # Determine feature directory using centralized detection
         cwd = Path.cwd().resolve()
-        feature_dir = _find_feature_directory(repo_root, cwd, explicit_feature=feature)
+        feature_dir = _find_feature_directory(
+            main_repo_root, cwd, explicit_feature=feature
+        )
 
         plan_file = feature_dir / "plan.md"
-        planning_branch = _resolve_planning_branch(repo_root, feature_dir)
+        planning_branch = _resolve_planning_branch(main_repo_root, feature_dir)
 
         # Find plan template
         plan_template_candidates = [
-            repo_root / ".kittify" / "templates" / "plan-template.md",
-            repo_root / "src" / "specify_cli" / "templates" / "plan-template.md",
-            repo_root / "templates" / "plan-template.md",
+            main_repo_root / ".kittify" / "templates" / "plan-template.md",
+            main_repo_root / "src" / "specify_cli" / "templates" / "plan-template.md",
+            main_repo_root / "templates" / "plan-template.md",
         ]
 
         plan_template = None
@@ -630,7 +636,14 @@ def setup_plan(
 
         # Commit plan.md to target branch
         feature_slug = feature_dir.name
-        _commit_to_branch(plan_file, feature_slug, "plan", repo_root, planning_branch, json_output)
+        _commit_to_branch(
+            plan_file,
+            feature_slug,
+            "plan",
+            main_repo_root,
+            planning_branch,
+            json_output,
+        )
 
         # T014 + T016: Documentation mission wiring for plan
         mission_key = get_feature_mission_key(feature_dir)
