@@ -124,7 +124,23 @@ Planning requirements (scale to complexity):
    - Phase 1: Update agent context by running the agent script
    - Re-evaluate Constitution Check post-design, asking the user to resolve new gaps before proceeding
 
-6. **STOP and report**: This command ends after Phase 1 planning. Report branch, IMPL_PLAN path, and generated artifacts.
+6. **Generate tech-decisions.md** (MANDATORY for software-dev missions):
+
+   After completing Phase 1, extract mandatory technical decisions into `FEATURE_DIR/tech-decisions.md` using the bundled template (`.kittify/missions/software-dev/templates/tech-decisions-template.md` or fallback `src/specify_cli/templates/tech-decisions-template.md`).
+
+   **What to extract**:
+   - **Required Libraries & Frameworks**: Every entry from plan.md `Primary Dependencies` becomes a `TD-xxx` row. For each library, write a concrete verification method that checks ACTUAL USAGE, not just import/dependency listing. A library listed as a dependency but not meaningfully used in the code is the #1 most common implementation failure.
+   - **Architecture Patterns**: Extract from plan.md Architecture section. Each pattern needs a concrete verification method (e.g., "Single get_emitter() accessor, no direct instantiation").
+   - **Forbidden Approaches**: For each required library, explicitly state what the implementor must NOT do. If you require "Use LangGraph", add a forbidden entry "Do NOT implement custom graph execution by hand". If you require "Use Pingora", add "Do NOT build a proxy from raw TCP sockets".
+   - **Constraints**: Extract from plan.md Performance Goals, Constraints, and Target Platform fields.
+
+   **Scope column**: At plan time, set scope to "All WPs" or estimate which WPs will need each decision. The `/spec-kitty.tasks` command will refine scope to specific WP IDs later.
+
+   **Verification column**: Write specific, grep-able checks where possible (e.g., "import langgraph AND StateGraph() constructor called"). Reviewers will use these as their compliance checklist.
+
+   **Commit**: The tech-decisions.md file should be committed alongside plan.md artifacts.
+
+7. **STOP and report**: This command ends after Phase 1 planning + tech-decisions generation. Report branch, IMPL_PLAN path, and generated artifacts.
 
    **⚠️ CRITICAL: DO NOT proceed to task generation!** The user must explicitly run `/spec-kitty.tasks` to generate work packages. Your job is COMPLETE after reporting the planning artifacts.
 
@@ -189,6 +205,7 @@ Planning requirements (scale to complexity):
 
 After reporting:
 - `plan.md` path
+- `tech-decisions.md` path (MANDATORY for software-dev missions)
 - `research.md` path (if generated)
 - `data-model.md` path (if generated)
 - `contracts/` contents (if generated)
@@ -203,5 +220,7 @@ Do NOT:
 - ❌ Proceed to implementation
 
 The user will run `/spec-kitty.tasks` when they are ready to generate work packages.
+
+**If tech-decisions.md was not generated**: You MUST go back and generate it before reporting. Every software-dev plan must have a tech-decisions.md.
 
 **Next suggested command**: `/spec-kitty.tasks` (user must invoke this explicitly)

@@ -7,6 +7,25 @@ All notable changes to the Spec Kitty CLI and templates are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.0.3] - 2026-03-18
+
+### ✅ Added
+
+- **Tech-decisions.md artifact**: New document generated during `/spec-kitty.plan` that captures mandatory technical decisions (required libraries, architecture patterns, forbidden approaches, constraints) in a structured, verifiable format. Closes the gap where implementors ignored planned library/framework choices and reviewers failed to catch it.
+- **Implement prompt injection**: The `spec-kitty agent workflow implement` command now injects tech decisions from `tech-decisions.md` directly into the implementor's prompt with a prominent MANDATORY COMPLIANCE banner.
+- **Review compliance checklist**: The `spec-kitty agent workflow review` command now generates a mandatory technical compliance checklist from `tech-decisions.md` that reviewers must verify before approving.
+- **Template scaffolding**: `setup-plan` command now copies `tech-decisions-template.md` alongside `plan-template.md` during feature initialization.
+- **Validation warning**: `validate_feature_structure` now warns when `tech-decisions.md` is missing but `plan.md` exists.
+- **Task generation integration**: `/spec-kitty.tasks` command template now loads `tech-decisions.md` and embeds per-WP decisions into each work package prompt file.
+- **Review template updates**: Both base and software-dev review templates now include mandatory technical decision compliance checks (section 4.0) and updated REJECT/APPROVE criteria.
+
+## [1.0.2] - 2026-03-04
+
+### 🐛 Fixed
+
+- **Parallel checkout spec routing hardening**: CLI startup now auto-creates or repairs a `kitty-specs` symlink for parallel git checkouts so they point to the canonical spec-storage worktree instead of creating a second local specs tree.
+- **WP isolation preserved**: The startup guard explicitly skips managed `.worktrees/*` implementation workspaces and never overwrites an existing non-symlink `kitty-specs` path.
+
 ## [1.0.0] - 2026-02-24
 
 ### 🔧 Changed

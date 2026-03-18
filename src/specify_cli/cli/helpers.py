@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 import sys
+import logging
 from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path
 
@@ -15,9 +16,11 @@ from typer.core import TyperGroup
 
 from specify_cli.core.config import BANNER
 from specify_cli.core.project_resolver import locate_project_root
+from specify_cli.core.spec_checkout_link import ensure_parallel_checkout_specs_link
 
 console = Console()
 TAGLINE = "Spec Kitty - Spec-Driven Development Toolkit (forked from GitHub Spec Kit)"
+logger = logging.getLogger(__name__)
 
 
 class BannerGroup(TyperGroup):
@@ -95,6 +98,12 @@ def show_banner() -> None:
 
 def callback(ctx: typer.Context) -> None:
     """Display the banner when CLI is invoked without a subcommand."""
+    if ctx.invoked_subcommand and ctx.invoked_subcommand != "init":
+        try:
+            ensure_parallel_checkout_specs_link()
+        except Exception as exc:  # pragma: no cover - defensive safety net
+            logger.debug("parallel checkout link guard skipped: %s", exc)
+
     if ctx.invoked_subcommand is None and "--help" not in sys.argv and "-h" not in sys.argv:
         show_banner()
         console.print(Align.center("[dim]Run 'spec-kitty --help' for usage information[/dim]"))

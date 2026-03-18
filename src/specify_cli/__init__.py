@@ -19,6 +19,7 @@ Usage:
 """
 
 import os
+import logging
 from pathlib import Path
 
 import typer
@@ -42,6 +43,9 @@ from specify_cli.cli.helpers import (
 )
 from specify_cli.cli.commands import register_commands
 from specify_cli.cli.commands.init import register_init_command
+from specify_cli.core.spec_checkout_link import ensure_parallel_checkout_specs_link
+
+logger = logging.getLogger(__name__)
 
 def activate_mission(project_path: Path, mission_key: str, mission_display: str, console: Console) -> str:
     """
@@ -86,10 +90,15 @@ app.callback()(root_callback)
 
 @app.callback()
 def main_callback(
+    ctx: typer.Context,
     version: bool = typer.Option(None, "--version", "-v", callback=version_callback, is_eager=True, help="Show version and exit")
 ) -> None:
     """Main callback for version flag."""
-    pass
+    if ctx.invoked_subcommand and ctx.invoked_subcommand != "init":
+        try:
+            ensure_parallel_checkout_specs_link()
+        except Exception as exc:  # pragma: no cover - defensive guard
+            logger.debug("parallel checkout link guard skipped: %s", exc)
 
 
 def ensure_executable_scripts(project_path: Path, tracker: StepTracker | None = None) -> None:

@@ -634,6 +634,35 @@ def setup_plan(
             with package_template.open("rb") as src, open(plan_file, "wb") as dst:
                 shutil.copyfileobj(src, dst)
 
+        # Copy tech-decisions template alongside plan template
+        tech_decisions_file = feature_dir / "tech-decisions.md"
+        if not tech_decisions_file.exists():
+            tech_decisions_template_candidates = [
+                main_repo_root / ".kittify" / "templates" / "tech-decisions-template.md",
+                main_repo_root / "src" / "specify_cli" / "templates" / "tech-decisions-template.md",
+                main_repo_root / "templates" / "tech-decisions-template.md",
+            ]
+
+            tech_decisions_template = None
+            for candidate in tech_decisions_template_candidates:
+                if candidate.exists():
+                    tech_decisions_template = candidate
+                    break
+
+            if tech_decisions_template is not None:
+                shutil.copy2(tech_decisions_template, tech_decisions_file)
+            else:
+                td_package_template = files("specify_cli").joinpath(
+                    "templates", "tech-decisions-template.md"
+                )
+                try:
+                    with td_package_template.open("rb") as src, open(
+                        tech_decisions_file, "wb"
+                    ) as dst:
+                        shutil.copyfileobj(src, dst)
+                except Exception:
+                    pass  # Non-fatal: agent will create tech-decisions.md during planning
+
         # Commit plan.md to target branch
         feature_slug = feature_dir.name
         _commit_to_branch(
@@ -796,6 +825,8 @@ def setup_plan(
                 "plan_file": str(plan_file),
                 "feature_dir": str(feature_dir),
             }
+            if tech_decisions_file.exists():
+                result["tech_decisions_file"] = str(tech_decisions_file)
             if gap_analysis_path:
                 result["gap_analysis"] = gap_analysis_path
             if generators_detected:
@@ -803,6 +834,8 @@ def setup_plan(
             print(json.dumps(result))
         else:
             console.print(f"[green]✓[/green] Plan scaffolded: {plan_file}")
+            if tech_decisions_file.exists():
+                console.print(f"[green]✓[/green] Tech decisions template: {tech_decisions_file}")
 
     except Exception as e:
         if json_output:

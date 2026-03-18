@@ -67,6 +67,181 @@ def _write_prompt_to_file(
     return prompt_file
 
 
+def _load_tech_decisions(feature_dir: Path) -> Optional[str]:
+    """Load tech-decisions.md content from feature directory.
+
+    Returns the file content if it exists and is non-trivial (has actual
+    decisions, not just the template placeholders), or None otherwise.
+    """
+    td_file = feature_dir / "tech-decisions.md"
+    if not td_file.exists():
+        return None
+    content = td_file.read_text(encoding="utf-8")
+    # Check if it's just the unfilled template (contains placeholder rows only)
+    if "e.g., Use LangGraph" in content and "TD-001" not in content.replace(
+        "TD-001 | [e.g.,", ""
+    ):
+        return None
+    # Check it has at least one real TD/TF/TC entry (not just template examples)
+    has_real_entries = False
+    for line in content.splitlines():
+        stripped = line.strip()
+        if stripped.startswith("| TD-") or stripped.startswith("| TF-") or stripped.startswith("| TC-"):
+            # Skip template example rows
+            if "[e.g.," not in stripped:
+                has_real_entries = True
+                break
+    if not has_real_entries:
+        return None
+    return content
+
+
+def _build_tech_decisions_implement_section(tech_decisions_content: str) -> list[str]:
+    """Build the tech decisions section for implement prompts.
+
+    Returns a list of lines to inject into the prompt.
+    """
+    lines: list[str] = []
+    lines.append("")
+    lines.append("\u2554" + "=" * 78 + "\u2557")
+    lines.append(
+        "\u2551  TECHNICAL DECISIONS -- MANDATORY COMPLIANCE"
+        "                               \u2551"
+    )
+    lines.append("\u2560" + "=" * 78 + "\u2563")
+    lines.append(
+        "\u2551  You MUST follow the technical decisions below."
+        "                            \u2551"
+    )
+    lines.append(
+        "\u2551  These come from the plan's tech-decisions.md."
+        "                            \u2551"
+    )
+    lines.append(
+        "\u2551  Reviewers will REJECT work that ignores these decisions."
+        "                \u2551"
+    )
+    lines.append(
+        "\u2551                                                "
+        "                            \u2551"
+    )
+    lines.append(
+        "\u2551  A required library that is only an unused dependency = REJECTION"
+        "          \u2551"
+    )
+    lines.append(
+        "\u2551  Re-implementing what a required library provides = REJECTION"
+        "              \u2551"
+    )
+    lines.append("\u255a" + "=" * 78 + "\u255d")
+    lines.append("")
+    lines.append(tech_decisions_content)
+    lines.append("")
+    return lines
+
+
+def _build_tech_decisions_review_checklist(tech_decisions_content: str) -> list[str]:
+    """Build the tech decisions compliance checklist for review prompts.
+
+    Parses the tech-decisions.md content and generates a mandatory checklist
+    that the reviewer must verify.
+
+    Returns a list of lines to inject into the prompt.
+    """
+    lines: list[str] = []
+    lines.append("")
+    lines.append("\u2554" + "=" * 78 + "\u2557")
+    lines.append(
+        "\u2551  TECHNICAL COMPLIANCE CHECKLIST -- MANDATORY"
+        "                               \u2551"
+    )
+    lines.append("\u2560" + "=" * 78 + "\u2563")
+    lines.append(
+        "\u2551  You MUST verify each decision below. Check ACTUAL USAGE,"
+        " not just deps. \u2551"
+    )
+    lines.append(
+        "\u2551  A required library only in dependency list but not used = REJECT"
+        "         \u2551"
+    )
+    lines.append(
+        "\u2551  Re-implementing required library functionality by hand = REJECT"
+        "          \u2551"
+    )
+    lines.append("\u255a" + "=" * 78 + "\u255d")
+    lines.append("")
+
+    # Parse tables from tech-decisions content to build checklist
+    required_libs: list[str] = []
+    forbidden: list[str] = []
+    constraints: list[str] = []
+    arch_patterns: list[str] = []
+
+    current_section = ""
+    for line in tech_decisions_content.splitlines():
+        stripped = line.strip()
+        if "## Required Libraries" in stripped:
+            current_section = "required"
+        elif "## Architecture Patterns" in stripped:
+            current_section = "arch"
+        elif "## Forbidden Approaches" in stripped:
+            current_section = "forbidden"
+        elif "## Constraints" in stripped:
+            current_section = "constraints"
+        elif stripped.startswith("##"):
+            current_section = ""
+
+        # Parse table rows (skip header rows and separator rows)
+        if stripped.startswith("| TD-") or stripped.startswith("| TF-") or stripped.startswith("| TC-"):
+            if "[e.g.," in stripped:
+                continue  # Skip template examples
+            cells = [c.strip() for c in stripped.split("|")[1:-1]]
+            if len(cells) >= 3:
+                item_id = cells[0]
+                decision = cells[1]
+                verification = cells[-1] if len(cells) >= 4 else cells[2]
+                if current_section == "required":
+                    required_libs.append(f"- [ ] {item_id}: {decision}")
+                    required_libs.append(f"      Verify: {verification}")
+                elif current_section == "arch":
+                    arch_patterns.append(f"- [ ] {item_id}: {decision}")
+                    arch_patterns.append(f"      Verify: {verification}")
+                elif current_section == "forbidden":
+                    instead_use = cells[3] if len(cells) >= 4 else "N/A"
+                    forbidden.append(f"- [ ] {item_id}: Verified NO {decision}")
+                    forbidden.append(f"      Must use instead: {instead_use}")
+                elif current_section == "constraints":
+                    constraints.append(f"- [ ] {item_id}: {decision}")
+                    constraints.append(f"      Verify: {verification}")
+
+    if required_libs:
+        lines.append("REQUIRED LIBRARIES & FRAMEWORKS (verify ACTUAL USAGE):")
+        lines.extend(required_libs)
+        lines.append("")
+
+    if arch_patterns:
+        lines.append("ARCHITECTURE PATTERNS (verify pattern is followed):")
+        lines.extend(arch_patterns)
+        lines.append("")
+
+    if forbidden:
+        lines.append("FORBIDDEN APPROACHES (verify NONE are present):")
+        lines.extend(forbidden)
+        lines.append("")
+
+    if constraints:
+        lines.append("CONSTRAINTS (verify compliance):")
+        lines.extend(constraints)
+        lines.append("")
+
+    if not (required_libs or arch_patterns or forbidden or constraints):
+        lines.append("(No specific checklist items parsed from tech-decisions.md)")
+        lines.append("Review the full tech-decisions.md document manually.")
+        lines.append("")
+
+    return lines
+
+
 app = typer.Typer(
     name="workflow",
     help="Workflow commands that display prompts and instructions for agents",
@@ -938,6 +1113,11 @@ def implement(
             lines.append("╚" + "=" * 78 + "╝")
             lines.append("")
 
+        # Tech decisions injection (safety net — decisions should also be in WP file)
+        tech_decisions_content = _load_tech_decisions(feature_dir)
+        if tech_decisions_content:
+            lines.extend(_build_tech_decisions_implement_section(tech_decisions_content))
+
         # WP content marker and content
         lines.append("╔" + "=" * 78 + "╗")
         lines.append(
@@ -1627,6 +1807,11 @@ def review(
         lines.append("Review the implementation against the requirements below.")
         lines.append("Check code quality, tests, documentation, and adherence to spec.")
         lines.append("")
+
+        # Tech decisions compliance checklist (injected from tech-decisions.md)
+        tech_decisions_content = _load_tech_decisions(feature_dir)
+        if tech_decisions_content:
+            lines.extend(_build_tech_decisions_review_checklist(tech_decisions_content))
 
         # WP content marker and content
         lines.append("╔" + "=" * 78 + "╗")

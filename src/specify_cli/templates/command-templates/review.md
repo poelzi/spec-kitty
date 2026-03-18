@@ -57,6 +57,32 @@ This is intentional - worktrees provide isolation for parallel feature developme
 
    **CRITICAL**: Your job is to FIND PROBLEMS, not just verify checkboxes. Assume the implementation has issues until proven otherwise.
 
+   ### 4.0 Technical Decision Compliance (CRITICAL -- CHECK FIRST)
+
+   **This is the #1 most common implementation failure.** Plans specify libraries, frameworks, and patterns that implementors must use. Agents frequently ignore these decisions — adding a library as a dependency but never actually using it, or reimplementing the functionality by hand.
+
+   **Read `tech-decisions.md`** (in the feature directory alongside plan.md). If it exists, verify every entry:
+
+   - [ ] ALL required libraries from tech-decisions.md are **actually USED** in the implementation (not just imported or listed as a dependency). Grep for real usage patterns: function calls, class instantiation, method invocations.
+   - [ ] ALL architecture patterns from tech-decisions.md are **followed** in the implementation. Check structural compliance, not just surface-level mentions.
+   - [ ] **NO** forbidden approaches from tech-decisions.md are present in the implementation. Check that agents did not reimplement functionality that a required library already provides.
+   - [ ] ALL constraints from tech-decisions.md are **met** or explicitly documented as exceptions with justification.
+
+   **Verification method**: For each Required Library entry:
+   1. Check the dependency file (pyproject.toml, Cargo.toml, package.json) — library should be listed
+   2. Grep implementation code for actual usage (function calls, not just imports)
+   3. Verify the library is used for its intended purpose (not just imported and ignored)
+
+   **Examples of violations to REJECT**:
+   - Plan says "use LangGraph" but implementation builds a custom graph execution loop
+   - Plan says "use Pingora" but Pingora is only in Cargo.toml, never used in code
+   - Plan says "Singleton pattern" but implementation creates instances directly
+   - Plan says "use httpx for async" but implementation uses synchronous requests
+
+   **If tech-decisions.md doesn't exist**: Read plan.md Technical Context section (especially `Primary Dependencies`) and verify those libraries are actually used.
+
+   **REJECT if**: Any required library/framework/pattern from the plan is not meaningfully used in the implementation.
+
    ### 4.1 Completeness Scrutiny
 
    **Beyond checkbox-ticking:**
@@ -431,6 +457,9 @@ This is intentional - worktrees provide isolation for parallel feature developme
    ### 4.12 Review Decision Criteria
 
    **REJECT (send back to planned) if ANY of these:**
+   - Required library/framework from tech-decisions.md (or plan.md) not meaningfully used
+   - Required architecture pattern from tech-decisions.md not followed
+   - Forbidden approach from tech-decisions.md present in implementation
    - Any TODOs/FIXMEs in production code (tests OK)
    - Any simulated/mocked functionality (except in tests)
    - Any empty exception handlers without justification
@@ -446,6 +475,9 @@ This is intentional - worktrees provide isolation for parallel feature developme
    - Branch needs rebasing onto base branch (not fast-forwardable). If the implementation itself passes review, perform the rebase yourself (see Step 5). Only reject if the rebase produces complex, non-trivial conflicts that require the implementer's judgment.
 
    **APPROVE ONLY if ALL of these:**
+   - All required libraries/frameworks from tech-decisions.md (or plan.md) meaningfully used (section 4.0 checked)
+   - All architecture patterns from tech-decisions.md followed
+   - No forbidden approaches from tech-decisions.md present
    - Every subtask fully implemented (no shortcuts)
    - All tests pass and actually validate behavior
    - Error handling comprehensive and helpful

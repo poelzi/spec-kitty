@@ -21,6 +21,8 @@ description: Create an isolated workspace (worktree) for implementing a specific
 
 **You MUST scroll to the BOTTOM** to see the completion command!
 
+**CRITICAL**: The prompt includes a **TECHNICAL DECISIONS -- MANDATORY COMPLIANCE** section (if tech-decisions.md exists for this feature). You MUST follow all required libraries, frameworks, and patterns listed there. Adding a library as a dependency without actually using it in your code is NOT compliance. Reviewers will reject work that ignores these decisions.
+
 Run this command to get the work package prompt and implementation instructions:
 
 ```bash

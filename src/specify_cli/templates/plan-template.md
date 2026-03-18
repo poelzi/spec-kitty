@@ -44,6 +44,7 @@ The planner will not begin until all planning questions have been answered—cap
 ```
 kitty-specs/[###-feature]/
 ├── plan.md              # This file (/spec-kitty.plan command output)
+├── tech-decisions.md    # Mandatory technical decisions (/spec-kitty.plan command output)
 ├── research.md          # Phase 0 output (/spec-kitty.plan command)
 ├── data-model.md        # Phase 1 output (/spec-kitty.plan command)
 ├── quickstart.md        # Phase 1 output (/spec-kitty.plan command)

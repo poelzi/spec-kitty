@@ -24,6 +24,22 @@ Default merge target is the feature's local landing branch (`--merge-target land
 
 If no WP ID is provided, it will automatically find the first work package with `lane: "for_review"` and move it to "doing" for you.
 
+## Technical Compliance (MANDATORY -- CHECK FIRST)
+
+Before approving, you MUST verify all items in the **TECHNICAL COMPLIANCE CHECKLIST** section injected into the review prompt by the workflow command. These are mandatory decisions from the plan's `tech-decisions.md` that the implementor was required to follow.
+
+**Automatic rejection triggers**:
+- A required library is listed as a dependency but NOT meaningfully used in the implementation code (just adding it to `requirements.txt`/`Cargo.toml`/`package.json` is NOT compliance)
+- A required architecture pattern is not followed (e.g., plan says "use Singleton pattern" but implementation creates multiple instances)
+- A forbidden approach was used (e.g., plan says "use LangGraph" but implementation reimplements graph execution by hand)
+- A required constraint is violated without documented justification
+
+**How to verify**: For each Required Library entry in the checklist, grep the implementation diff for actual usage patterns (function calls, class instantiation, method invocations) -- not just import statements or dependency declarations.
+
+If no TECHNICAL COMPLIANCE CHECKLIST appears in the prompt (tech-decisions.md may not exist for older features), read `kitty-specs/<feature>/tech-decisions.md` or `plan.md` Technical Context section directly and verify the same way.
+
+---
+
 ## Dependency checks (required)
 
 - dependency_check: If the WP frontmatter lists `dependencies`, confirm each dependency WP is merged to the landing branch before you review this WP.

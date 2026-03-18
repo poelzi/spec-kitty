@@ -480,6 +480,18 @@ def validate_feature_structure(
     else:
         paths["spec_file"] = str(spec_file)
 
+    # Check optional but important files
+    tech_decisions_file = feature_dir / "tech-decisions.md"
+    if tech_decisions_file.exists():
+        paths["tech_decisions_file"] = str(tech_decisions_file)
+    else:
+        # Only warn if plan.md exists (tech-decisions should accompany the plan)
+        if (feature_dir / "plan.md").exists():
+            warnings.append(
+                "Missing tech-decisions.md (recommended alongside plan.md for "
+                "tracking mandatory library/framework decisions)"
+            )
+
     # Check directory structure
     recommended_dirs = ["checklists", "research", "tasks"]
     for dir_name in recommended_dirs:

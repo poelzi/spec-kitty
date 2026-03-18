@@ -91,9 +91,10 @@ Work packages are generated directly in `kitty-specs/###-feature/` and committed
    - ❌ `WP01-slug.md` (wrong directory)
 
 2. **Load design documents** from `FEATURE_DIR` (only those present):
-   - **Required**: plan.md (tech architecture, stack), spec.md (user stories & priorities)
+   - **Required**: plan.md (tech architecture, stack), spec.md (user stories & priorities), tech-decisions.md (mandatory library/framework/pattern decisions)
    - **Optional**: data-model.md (entities), contracts/ (API schemas), research.md (decisions), quickstart.md (validation scenarios)
    - Scale your effort to the feature: simple UI tweaks deserve lighter coverage, multi-system releases require deeper decomposition.
+   - **tech-decisions.md is critical**: This document contains mandatory decisions about which libraries, frameworks, and patterns MUST be used. Each WP prompt MUST include the relevant tech decisions so implementors cannot ignore them and reviewers can verify compliance.
 
 3. **Derive fine-grained subtasks** (IDs `T001`, `T002`, ...):
    - Parse plan/spec to enumerate concrete implementation steps, tests (only if explicitly requested), migrations, and operational work.
@@ -147,12 +148,25 @@ Work packages are generated directly in `kitty-specs/###-feature/` and committed
      - Use the bundled task prompt template (`.kittify/missions/software-dev/templates/task-prompt-template.md`) to capture:
      - Frontmatter with `work_package_id`, `subtasks` array, `lane: "planned"`, `dependencies`, history entry
        - Objective, context, detailed guidance per subtask
+       - **Technical Decisions section** (MANDATORY - see below)
        - Test strategy (only if requested)
        - Definition of Done, risks, reviewer guidance
      - Update `tasks.md` to reference the prompt filename
    - **TARGET PROMPT SIZE**: 200-500 lines per WP (results from 3-7 subtasks)
    - **MAXIMUM PROMPT SIZE**: 700 lines per WP (10 subtasks max)
    - **If prompts are >700 lines**: Split the WP - it's too large
+
+   **TECHNICAL DECISIONS EMBEDDING (MANDATORY)**:
+
+   For each WP prompt, populate the `## Technical Decisions (MANDATORY)` section from `tech-decisions.md`:
+
+   a. **Filter by scope**: Only include decisions where the Scope column matches this WP (or "All WPs").
+   b. **Required Libraries & Frameworks**: Copy matching `TD-xxx` rows into the WP's table. Include ID, Decision, and Verification columns.
+   c. **Forbidden Approaches**: Copy matching `TF-xxx` rows. Include ID, Do NOT, and Instead Use columns.
+   d. **Constraints**: Copy matching `TC-xxx` rows. Include ID, Constraint, and Verification columns.
+   e. **Update tech-decisions.md scope**: After assigning decisions to WPs, update the Scope column in `tech-decisions.md` with specific WP IDs (replace "All WPs" with actual WP list where appropriate).
+
+   If `tech-decisions.md` does not exist or is empty, note this in the WP prompt: "No tech-decisions.md found. Implementor: read plan.md Technical Context section directly."
 
    **IMPORTANT**: All WP files live in flat `tasks/` directory. Lane status is tracked ONLY in the `lane:` frontmatter field, NOT by directory location. Agents can change lanes by editing the `lane:` field directly or using `spec-kitty agent tasks move-task`.
 
@@ -359,9 +373,12 @@ Run `spec-kitty agent feature check-prerequisites --json --paths-only --include-
 Read from `FEATURE_DIR`:
 - spec.md (required)
 - plan.md (required)
+- tech-decisions.md (required for software-dev missions - contains mandatory library/framework decisions)
 - data-model.md (optional)
 - research.md (optional)
 - contracts/ (optional)
+
+**If tech-decisions.md is missing**: Warn the user and recommend running `/spec-kitty.plan` again to generate it. Proceed with plan.md Technical Context as fallback, but note that tech decisions enforcement will be weaker without the structured document.
 
 ### Step 3: Derive ALL Subtasks
 

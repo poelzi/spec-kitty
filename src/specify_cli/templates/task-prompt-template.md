@@ -78,8 +78,34 @@ The `spec-kitty implement` command will display warnings when:
 ## Context & Constraints
 
 - Reference prerequisite work and related documents.
-- Link to supporting specs: `.kittify/memory/constitution.md`, `kitty-specs/.../plan.md`, `kitty-specs/.../tasks.md`, data model, contracts, research, quickstart.
+- Link to supporting specs: `.kittify/memory/constitution.md`, `kitty-specs/.../plan.md`, `kitty-specs/.../tech-decisions.md`, `kitty-specs/.../tasks.md`, data model, contracts, research, quickstart.
 - Highlight architectural decisions, constraints, or trade-offs to honor.
+
+## Technical Decisions (MANDATORY)
+
+> **These decisions are extracted from the plan's tech-decisions.md. You MUST follow them.**
+> **Reviewers will verify compliance with each item. Violations cause automatic rejection.**
+>
+> A library listed as a dependency but not meaningfully used in the code = REJECTION.
+> Re-implementing functionality that a required library provides = REJECTION.
+
+### Required Libraries & Frameworks
+
+| ID | Decision | Verification |
+|----|----------|-------------|
+| [Populated by /spec-kitty.tasks from tech-decisions.md - only decisions scoped to this WP] |
+
+### Forbidden Approaches
+
+| ID | Do NOT | Instead Use |
+|----|--------|-------------|
+| [Populated by /spec-kitty.tasks from tech-decisions.md - only decisions scoped to this WP] |
+
+### Constraints
+
+| ID | Constraint | Verification |
+|----|-----------|-------------|
+| [Populated by /spec-kitty.tasks from tech-decisions.md - only constraints scoped to this WP] |
 
 ## Subtasks & Detailed Guidance
 
