@@ -588,6 +588,16 @@ class WorkPackage:
 # ---------------------------------------------------------------------------
 
 
+def _relative_to_safe(path: Path, base: Path) -> Path:
+    """``path.relative_to(base)`` that degrades to the absolute path when
+    ``path`` is outside ``base`` (e.g. a spec root resolved to a sibling
+    ``spec-kitty/`` worktree)."""
+    try:
+        return path.relative_to(base)
+    except ValueError:
+        return path
+
+
 def locate_work_package(
     repo_root: Path, feature: str, wp_id: str
 ) -> WorkPackage:
@@ -607,7 +617,11 @@ def locate_work_package(
     Raises:
         TaskCliError: If the WP cannot be found or multiple matches exist.
     """
-    feature_path = repo_root / "kitty-specs" / feature
+    # Resolve via the centralized resolver so a stale/symlinked/split
+    # kitty-specs (real specs in a sibling spec-kitty/) still finds the feature.
+    from specify_cli.core.spec_artifact_resolver import resolve_feature_dir
+
+    feature_path = resolve_feature_dir(repo_root, feature, require_healthy=False)
     tasks_root = feature_path / "tasks"
     if not tasks_root.exists():
         raise TaskCliError(
@@ -638,11 +652,11 @@ def locate_work_package(
 
     if not candidates:
         raise TaskCliError(
-            f"Work package '{wp_id}' not found under kitty-specs/{feature}/tasks."
+            f"Work package '{wp_id}' not found under {tasks_root}."
         )
     if len(candidates) > 1:
         joined = "\n".join(
-            str(item[1].relative_to(repo_root)) for item in candidates
+            str(_relative_to_safe(item[1], repo_root)) for item in candidates
         )
         raise TaskCliError(
             f"Multiple files matched '{wp_id}'. Refine the ID or clean "

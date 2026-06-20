@@ -2,12 +2,36 @@
 
 This module provides utilities for committing only specific files without
 capturing unrelated staged changes.
+
+Optional defence-in-depth: pass ``expected_branch`` and / or
+``expected_parent_oid`` to detect concurrent modifications to the worktree
+between context resolution and the commit (e.g. a manual ``git checkout``
+landing on the wrong branch).  When the precondition fails, the staged
+files are NOT committed and the caller learns about the race instead of
+silently producing a misplaced commit.
 """
 
 from __future__ import annotations
 
+import logging
 import subprocess
 from pathlib import Path
+
+logger = logging.getLogger(__name__)
+
+
+def _current_branch(repo_path: Path) -> str | None:
+    result = subprocess.run(
+        ["git", "symbolic-ref", "--short", "HEAD"],
+        cwd=repo_path,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if result.returncode != 0:
+        return None
+    branch = result.stdout.strip()
+    return branch or None
 
 
 def safe_commit(
@@ -16,6 +40,9 @@ def safe_commit(
     commit_message: str,
     allow_empty: bool = False,
     no_verify: bool = False,
+    *,
+    expected_branch: str | None = None,
+    expected_parent_oid: str | None = None,
 ) -> bool:
     """Commit only specified files, preserving existing staging area.
 
@@ -34,6 +61,18 @@ def safe_commit(
         commit_message: The commit message to use
         allow_empty: If True, return success even if there's nothing to commit
         no_verify: If True, pass --no-verify to skip pre-commit hooks
+        expected_branch: If set, verify ``git symbolic-ref HEAD`` matches BEFORE
+            staging.  Mismatch returns ``False`` without staging or committing
+            so the caller can surface the race rather than silently producing
+            a misplaced commit.  Pass the resolved branch from your
+            :class:`SpecCommitContext` here.
+        expected_parent_oid: If set AND a real commit is produced, verify the
+            new commit's first parent matches the captured oid.  Skipped when
+            ``allow_empty`` is True and the commit was a no-op (nothing was
+            actually committed).  Mismatch returns ``False`` after the commit
+            was already made — the caller should treat this as "another
+            process committed concurrently" and decide whether to revert /
+            retry.
 
     Returns:
         True if commit succeeded (or nothing to commit with allow_empty=True),
@@ -49,6 +88,20 @@ def safe_commit(
         ... )
         True
     """
+    # Defence-in-depth: verify the branch BEFORE we touch the index, so a
+    # concurrent ``git checkout`` between resolve and commit fails fast
+    # instead of landing the commit on the wrong branch.
+    if expected_branch is not None:
+        actual_branch = _current_branch(repo_path)
+        if actual_branch != expected_branch:
+            logger.warning(
+                "Refusing safe_commit in %s: expected branch %r but HEAD is on %r",
+                repo_path,
+                expected_branch,
+                actual_branch,
+            )
+            return False
+
     # Normalize file paths to be relative to repo_path
     normalized_files = []
     for file in files_to_commit:
@@ -109,6 +162,35 @@ def safe_commit(
 
         # Check for success
         if commit_result.returncode == 0:
+            # Defence-in-depth: verify the new commit's parent matches the
+            # oid the caller captured immediately after ensuring the branch.
+            # Mismatch means another process slipped a commit in between
+            # resolve+ensure and the commit we just produced — the commit
+            # is still made (we cannot atomically un-commit), but the
+            # caller should treat False as "concurrent modification, please
+            # reconcile".
+            if expected_parent_oid is not None:
+                parent_result = subprocess.run(
+                    ["git", "rev-parse", "HEAD^"],
+                    cwd=repo_path,
+                    capture_output=True,
+                    text=True,
+                    encoding="utf-8",
+                    errors="replace",
+                    check=False,
+                )
+                if parent_result.returncode == 0:
+                    actual_parent = parent_result.stdout.strip()
+                    if actual_parent != expected_parent_oid:
+                        logger.warning(
+                            "safe_commit in %s landed a commit whose parent "
+                            "%s does not match the expected parent %s; "
+                            "another process likely committed concurrently",
+                            repo_path,
+                            actual_parent,
+                            expected_parent_oid,
+                        )
+                        return False
             return True
 
         # Check if it was "nothing to commit" scenario

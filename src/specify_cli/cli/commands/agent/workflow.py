@@ -33,6 +33,11 @@ from specify_cli.core.implement_validation import (
     validate_base_workspace_exists,
 )
 from specify_cli.core.paths import get_main_repo_root, is_worktree_context, locate_project_root
+from specify_cli.core.spec_commit_guard import (
+    ensure_branch_checked_out,
+    resolve_specs_repo_and_branch,
+)
+from specify_cli.core.spec_lock import kitty_specs_lock
 from specify_cli.core.vcs import get_vcs
 from specify_cli.git.commit_helpers import safe_commit
 from specify_cli.mission import get_deliverables_path, get_feature_mission_key
@@ -258,31 +263,32 @@ def _resolve_primary_branch(repo_root: Path) -> str:
         raise typer.Exit(1)
 
 
-def _resolve_git_repo_root_for_path(file_path: Path, fallback_repo_root: Path) -> Path:
-    """Resolve the git top-level that contains ``file_path``.
-
-    This is required for `kitty-specs/` orphan-branch worktrees where the
-    work package file lives in a different git repository than the main repo.
-    """
-    probe_dir = file_path if file_path.is_dir() else file_path.parent
-    result = subprocess.run(
-        ["git", "rev-parse", "--show-toplevel"],
-        cwd=probe_dir,
-        capture_output=True,
-        text=True,
-        check=False,
-    )
-    if result.returncode == 0:
-        return Path(result.stdout.strip()).resolve()
-    return fallback_repo_root
-
-
 def _ensure_target_branch_checked_out(
     repo_root: Path, feature_slug: str
 ) -> tuple[Path, str]:
-    """Ensure the planning repo is on the feature's target branch."""
-    main_repo_root = get_main_repo_root(repo_root)
+    """Ensure the planning repo is on the feature's target branch.
 
+    Uses the unified ``resolve_specs_repo_and_branch`` helper from
+    ``spec_commit_guard`` to detect worktrees, spec-storage configs,
+    and meta.json branch settings.
+
+    Always returns the **main** repo root (for building ``kitty-specs/``
+    paths).  Commit routing to worktrees is handled separately at each
+    commit site via ``resolve_specs_repo_and_branch``.
+
+    When ``kitty-specs/`` is a separate git worktree, skips the branch
+    checkout on the main repo entirely.
+    """
+    main_repo_root = get_main_repo_root(repo_root)
+    context = resolve_specs_repo_and_branch(main_repo_root, feature_slug)
+
+    if context.commit_repo_root.resolve() != main_repo_root.resolve():
+        # kitty-specs is a separate worktree/submodule.  Do not checkout the
+        # main repo; commit sites prepare the spec repo before writing.
+        return main_repo_root, context.target_branch
+
+    # For non-worktree setups, ensure the target branch exists and is
+    # checked out on the main repo (preserves existing behaviour).
     current_branch_result = subprocess.run(
         ["git", "rev-parse", "--abbrev-ref", "HEAD"],
         cwd=main_repo_root,
@@ -301,21 +307,7 @@ def _ensure_target_branch_checked_out(
         )
         raise typer.Exit(1)
 
-    # Prefer explicit upstream_branch in meta.json for planning artifacts,
-    # falling back to target_branch for legacy features, then current branch.
-    # Planning artifacts (kitty-specs/) must stay on the upstream branch (e.g., main),
-    # NOT on the landing branch (which is target_branch in v0.15.0+).
-    planning_branch = None
-    meta_file = main_repo_root / "kitty-specs" / feature_slug / "meta.json"
-    if meta_file.exists():
-        try:
-            meta = json.loads(meta_file.read_text(encoding="utf-8"))
-            # Use upstream_branch for planning (v0.15.0+), fall back to target_branch for legacy
-            planning_branch = meta.get("upstream_branch") or meta.get("target_branch")
-        except (json.JSONDecodeError, OSError):
-            planning_branch = None
-
-    target_branch = planning_branch or current_branch
+    target_branch = context.target_branch
 
     if current_branch != target_branch:
         primary_branch = _resolve_primary_branch(main_repo_root)
@@ -356,6 +348,72 @@ def _ensure_target_branch_checked_out(
         print(f"→ Using {target_branch} as planning branch")
 
     return main_repo_root, target_branch
+
+
+def _write_and_commit_wp_status(
+    main_repo_root: Path,
+    feature_slug: str,
+    wp_path: Path,
+    updated_doc: str,
+    commit_message: str,
+) -> bool:
+    """Write a WP status update only after the target commit repo is ready.
+
+    Serialised under the per-worktree :func:`kitty_specs_lock` so concurrent
+    CLI invocations (claude/opencode/manual) cannot race the resolve →
+    checkout → write → commit sequence.
+    """
+    original_doc = wp_path.read_text(encoding="utf-8") if wp_path.exists() else None
+
+    prospective_specs_dir = main_repo_root / "kitty-specs"
+    lock_target = (
+        prospective_specs_dir if prospective_specs_dir.exists() else main_repo_root
+    )
+    with kitty_specs_lock(lock_target):
+        commit_context = resolve_specs_repo_and_branch(main_repo_root, feature_slug)
+        commit_repo = commit_context.commit_repo_root
+        if not _is_git_repo(commit_repo):
+            wp_path.write_text(updated_doc, encoding="utf-8")
+            print("Warning: No git repository detected. Skipping status auto-commit.")
+            return True
+
+        ensure_branch_checked_out(commit_context)
+        # Capture the head oid AFTER ensuring the branch so safe_commit can
+        # detect a concurrent commit landing between here and our commit.
+        parent_oid_result = subprocess.run(
+            ["git", "rev-parse", "HEAD"],
+            cwd=commit_repo,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        expected_parent = (
+            parent_oid_result.stdout.strip()
+            if parent_oid_result.returncode == 0
+            else None
+        )
+        wp_path.write_text(updated_doc, encoding="utf-8")
+
+        commit_success = safe_commit(
+            repo_path=commit_repo,
+            files_to_commit=[wp_path.resolve()],
+            commit_message=commit_message,
+            allow_empty=True,
+            no_verify=True,
+            expected_branch=commit_context.target_branch,
+            expected_parent_oid=expected_parent,
+        )
+        if commit_success:
+            return True
+
+        if original_doc is None:
+            try:
+                wp_path.unlink()
+            except FileNotFoundError:
+                pass
+        else:
+            wp_path.write_text(original_doc, encoding="utf-8")
+        return False
 
 
 def _find_feature_slug(explicit_feature: str | None = None) -> str:
@@ -518,14 +576,18 @@ def _resolve_tasks_dir(repo_root: Path, feature_slug: str) -> Optional[Path]:
     Returns:
         Path to tasks directory, or None if not found
     """
-    # Always prefer planning repo tasks to avoid stale/orphan worktree copies.
-    tasks_dir = repo_root / "kitty-specs" / feature_slug / "tasks"
+    from specify_cli.core.spec_artifact_resolver import resolve_tasks_dir
 
-    # Legacy fallback: if planning repo tasks are missing, try current tree.
+    # Prefer the planning repo's specs. The resolver handles a stale/symlinked
+    # kitty-specs and a split layout (real specs in a sibling spec-kitty/).
+    tasks_dir = resolve_tasks_dir(repo_root, feature_slug, require_healthy=False)
+
+    # Legacy fallback: if planning repo tasks are missing, try the current tree.
     if not tasks_dir.exists():
         cwd = Path.cwd().resolve()
-        if (cwd / "kitty-specs" / feature_slug).exists():
-            tasks_dir = cwd / "kitty-specs" / feature_slug / "tasks"
+        cwd_tasks = resolve_tasks_dir(cwd, feature_slug, require_healthy=False)
+        if cwd_tasks.exists():
+            tasks_dir = cwd_tasks
 
     if not tasks_dir.exists():
         return None
@@ -864,33 +926,24 @@ def implement(
             # Add history entry to body
             updated_body = append_activity_log(wp.body, history_entry)
 
-            # Build and write updated document
+            # Build and commit updated document
             updated_doc = build_document(updated_front, updated_body, wp.padding)
-            wp.path.write_text(updated_doc, encoding="utf-8")
-
-            # Auto-commit to target branch when git is available.
-            # Some tests/fixtures intentionally run without git.
-            status_repo_root = _resolve_git_repo_root_for_path(wp.path, main_repo_root)
-            if _is_git_repo(status_repo_root):
-                actual_wp_path = wp.path.resolve()
-                commit_success = safe_commit(
-                    repo_path=status_repo_root,
-                    files_to_commit=[actual_wp_path],
-                    commit_message=f"chore: Start {normalized_wp_id} implementation [{agent}]",
-                    allow_empty=True,  # OK if already in this state
-                    no_verify=True,
-                )
-                if not commit_success:
-                    print(
-                        f"Error: Failed to commit workflow status update for {normalized_wp_id}. "
-                        "Status claim aborted."
-                    )
-                    raise typer.Exit(1)
+            commit_success = _write_and_commit_wp_status(
+                main_repo_root,
+                feature_slug,
+                wp.path,
+                updated_doc,
+                f"chore: Start {normalized_wp_id} implementation [{agent}]",
+            )
+            if not commit_success:
                 print(
-                    f"✓ Claimed {normalized_wp_id} (agent: {agent}, PID: {shell_pid}, target: {target_branch})"
+                    f"Error: Failed to commit workflow status update for {normalized_wp_id}. "
+                    "Status claim aborted."
                 )
-            else:
-                print("Warning: No git repository detected. Skipping status auto-commit.")
+                raise typer.Exit(1)
+            print(
+                f"✓ Claimed {normalized_wp_id} (agent: {agent}, PID: {shell_pid}, target: {target_branch})"
+            )
 
             # Reload to get updated content
             wp = locate_work_package(repo_root, feature_slug, normalized_wp_id)
@@ -916,26 +969,19 @@ def implement(
                     history_entry = f"- {timestamp} – {agent} – shell_pid={shell_pid} – lane=doing – Refreshed implementation claim via workflow command"
                     updated_body = append_activity_log(wp.body, history_entry)
                     updated_doc = build_document(updated_front, updated_body, wp.padding)
-                    wp.path.write_text(updated_doc, encoding="utf-8")
-
-                    status_repo_root = _resolve_git_repo_root_for_path(wp.path, main_repo_root)
-                    if _is_git_repo(status_repo_root):
-                        actual_wp_path = wp.path.resolve()
-                        commit_success = safe_commit(
-                            repo_path=status_repo_root,
-                            files_to_commit=[actual_wp_path],
-                            commit_message=f"chore: Refresh {normalized_wp_id} implementation claim [{agent}]",
-                            allow_empty=True,
-                            no_verify=True,
+                    commit_success = _write_and_commit_wp_status(
+                        main_repo_root,
+                        feature_slug,
+                        wp.path,
+                        updated_doc,
+                        f"chore: Refresh {normalized_wp_id} implementation claim [{agent}]",
+                    )
+                    if not commit_success:
+                        print(
+                            f"Error: Failed to commit workflow status update for {normalized_wp_id}. "
+                            "Status claim refresh aborted."
                         )
-                        if not commit_success:
-                            print(
-                                f"Error: Failed to commit workflow status update for {normalized_wp_id}. "
-                                "Status claim refresh aborted."
-                            )
-                            raise typer.Exit(1)
-                    else:
-                        print("Warning: No git repository detected. Skipping status auto-commit.")
+                        raise typer.Exit(1)
 
                     print(
                         f"✓ Refreshed {normalized_wp_id} claim (agent: {agent}, PID: {shell_pid}, target: {target_branch})"
@@ -953,7 +999,11 @@ def implement(
         has_feedback = review_status == "has_feedback"
 
         # Detect mission type and get deliverables_path for research missions
-        feature_dir = repo_root / "kitty-specs" / feature_slug
+        from specify_cli.core.spec_artifact_resolver import resolve_feature_dir
+
+        feature_dir = resolve_feature_dir(
+            repo_root, feature_slug, require_healthy=False
+        )
         mission_key = get_feature_mission_key(feature_dir)
         deliverables_path = None
         if mission_key == "research":
@@ -1352,31 +1402,10 @@ def _find_first_for_review_wp(repo_root: Path, feature_slug: str) -> Optional[st
     Returns:
         WP ID of first for_review task, or None if not found
     """
-    from specify_cli.core.paths import is_worktree_context
-
-    cwd = Path.cwd().resolve()
-
-    # Check if we're in a worktree - if so, use worktree's kitty-specs
-    if is_worktree_context(cwd):
-        # We're in a worktree, look for kitty-specs relative to cwd
-        if (cwd / "kitty-specs" / feature_slug).exists():
-            tasks_dir = cwd / "kitty-specs" / feature_slug / "tasks"
-        else:
-            # Walk up to find kitty-specs
-            current = cwd
-            while current != current.parent:
-                if (current / "kitty-specs" / feature_slug).exists():
-                    tasks_dir = current / "kitty-specs" / feature_slug / "tasks"
-                    break
-                current = current.parent
-            else:
-                # Fallback to repo_root
-                tasks_dir = repo_root / "kitty-specs" / feature_slug / "tasks"
-    else:
-        # We're in main repo
-        tasks_dir = repo_root / "kitty-specs" / feature_slug / "tasks"
-
-    if not tasks_dir.exists():
+    # Centralized resolution (planning-repo first, resolver-aware of a
+    # stale/symlinked/split kitty-specs); mirrors _find_first_planned_wp.
+    tasks_dir = _resolve_tasks_dir(repo_root, feature_slug)
+    if tasks_dir is None:
         return None
 
     # Find all WP files
@@ -1516,33 +1545,24 @@ def review(
             # Add history entry to body
             updated_body = append_activity_log(wp.body, history_entry)
 
-            # Build and write updated document
+            # Build and commit updated document
             updated_doc = build_document(updated_front, updated_body, wp.padding)
-            wp.path.write_text(updated_doc, encoding="utf-8")
-
-            # Auto-commit to target branch when git is available.
-            # Some tests/fixtures intentionally run without git.
-            status_repo_root = _resolve_git_repo_root_for_path(wp.path, main_repo_root)
-            if _is_git_repo(status_repo_root):
-                actual_wp_path = wp.path.resolve()
-                commit_success = safe_commit(
-                    repo_path=status_repo_root,
-                    files_to_commit=[actual_wp_path],
-                    commit_message=f"chore: Start {normalized_wp_id} review [{agent}]",
-                    allow_empty=True,  # OK if already in this state
-                    no_verify=True,
-                )
-                if not commit_success:
-                    print(
-                        f"Error: Failed to commit workflow status update for {normalized_wp_id}. "
-                        "Review claim aborted."
-                    )
-                    raise typer.Exit(1)
+            commit_success = _write_and_commit_wp_status(
+                main_repo_root,
+                feature_slug,
+                wp.path,
+                updated_doc,
+                f"chore: Start {normalized_wp_id} review [{agent}]",
+            )
+            if not commit_success:
                 print(
-                    f"✓ Claimed {normalized_wp_id} for review (agent: {agent}, PID: {shell_pid}, target: {target_branch})"
+                    f"Error: Failed to commit workflow status update for {normalized_wp_id}. "
+                    "Review claim aborted."
                 )
-            else:
-                print("Warning: No git repository detected. Skipping status auto-commit.")
+                raise typer.Exit(1)
+            print(
+                f"✓ Claimed {normalized_wp_id} for review (agent: {agent}, PID: {shell_pid}, target: {target_branch})"
+            )
 
             # Reload to get updated content
             wp = locate_work_package(repo_root, feature_slug, normalized_wp_id)
@@ -1568,26 +1588,19 @@ def review(
                     history_entry = f"- {timestamp} – {agent} – shell_pid={shell_pid} – lane=doing – Refreshed review claim via workflow command"
                     updated_body = append_activity_log(wp.body, history_entry)
                     updated_doc = build_document(updated_front, updated_body, wp.padding)
-                    wp.path.write_text(updated_doc, encoding="utf-8")
-
-                    status_repo_root = _resolve_git_repo_root_for_path(wp.path, main_repo_root)
-                    if _is_git_repo(status_repo_root):
-                        actual_wp_path = wp.path.resolve()
-                        commit_success = safe_commit(
-                            repo_path=status_repo_root,
-                            files_to_commit=[actual_wp_path],
-                            commit_message=f"chore: Refresh {normalized_wp_id} review claim [{agent}]",
-                            allow_empty=True,
-                            no_verify=True,
+                    commit_success = _write_and_commit_wp_status(
+                        main_repo_root,
+                        feature_slug,
+                        wp.path,
+                        updated_doc,
+                        f"chore: Refresh {normalized_wp_id} review claim [{agent}]",
+                    )
+                    if not commit_success:
+                        print(
+                            f"Error: Failed to commit workflow status update for {normalized_wp_id}. "
+                            "Review claim refresh aborted."
                         )
-                        if not commit_success:
-                            print(
-                                f"Error: Failed to commit workflow status update for {normalized_wp_id}. "
-                                "Review claim refresh aborted."
-                            )
-                            raise typer.Exit(1)
-                    else:
-                        print("Warning: No git repository detected. Skipping status auto-commit.")
+                        raise typer.Exit(1)
 
                     print(
                         f"✓ Refreshed {normalized_wp_id} review claim (agent: {agent}, PID: {shell_pid}, target: {target_branch})"
@@ -1645,7 +1658,11 @@ def review(
 
         # Capture dependency warning for both file and summary
         dependents_warning = []
-        feature_dir = repo_root / "kitty-specs" / feature_slug
+        from specify_cli.core.spec_artifact_resolver import resolve_feature_dir
+
+        feature_dir = resolve_feature_dir(
+            repo_root, feature_slug, require_healthy=False
+        )
         graph = build_dependency_graph(feature_dir)
         dependents = get_dependents(normalized_wp_id, graph)
         if dependents:
@@ -2030,7 +2047,11 @@ def schedule(
             print("Error: Not in a spec-kitty project.")
             raise typer.Exit(1)
 
-        feature_dir = repo_root / "kitty-specs" / feature_slug
+        from specify_cli.core.spec_artifact_resolver import resolve_feature_dir
+
+        feature_dir = resolve_feature_dir(
+            repo_root, feature_slug, require_healthy=False
+        )
         tasks_dir = feature_dir / "tasks"
 
         if not tasks_dir.exists():

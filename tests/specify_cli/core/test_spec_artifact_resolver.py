@@ -85,13 +85,13 @@ class TestResolveSpecArtifactRoot:
     def test_legacy_repo_returns_kitty_specs(self, legacy_repo: Path) -> None:
         """Legacy repos without spec_storage config return repo_root/kitty-specs."""
         result = resolve_spec_artifact_root(legacy_repo)
-        assert result == legacy_repo / "kitty-specs"
+        assert result == (legacy_repo / "kitty-specs").resolve()
 
     def test_legacy_repo_no_config_file(self, repo_root: Path) -> None:
         """Repos without any config.yaml return repo_root/kitty-specs."""
         # Remove the .kittify dir entirely (no config at all)
         result = resolve_spec_artifact_root(repo_root)
-        assert result == repo_root / "kitty-specs"
+        assert result == (repo_root / "kitty-specs").resolve()
 
     @patch("specify_cli.core.spec_artifact_resolver.discover_spec_worktree")
     def test_new_repo_healthy_worktree(
@@ -141,7 +141,7 @@ class TestResolveSpecArtifactRoot:
         """Legacy repos never check health (no worktree to check)."""
         # Should not raise even with require_healthy=True
         result = resolve_spec_artifact_root(legacy_repo, require_healthy=True)
-        assert result == legacy_repo / "kitty-specs"
+        assert result == (legacy_repo / "kitty-specs").resolve()
 
 
 # ============================================================================
@@ -155,7 +155,7 @@ class TestResolveFeatureDir:
     def test_legacy_repo_feature_dir(self, legacy_repo: Path) -> None:
         """Feature dir is under kitty-specs for legacy repos."""
         result = resolve_feature_dir(legacy_repo, "001-my-feature")
-        assert result == legacy_repo / "kitty-specs" / "001-my-feature"
+        assert result == (legacy_repo / "kitty-specs").resolve() / "001-my-feature"
 
     @patch("specify_cli.core.spec_artifact_resolver.discover_spec_worktree")
     def test_new_repo_feature_dir(
@@ -186,7 +186,10 @@ class TestResolveTasksDir:
     def test_legacy_repo_tasks_dir(self, legacy_repo: Path) -> None:
         """Tasks dir is under feature dir for legacy repos."""
         result = resolve_tasks_dir(legacy_repo, "001-my-feature")
-        assert result == legacy_repo / "kitty-specs" / "001-my-feature" / "tasks"
+        assert (
+            result
+            == (legacy_repo / "kitty-specs").resolve() / "001-my-feature" / "tasks"
+        )
 
     @patch("specify_cli.core.spec_artifact_resolver.discover_spec_worktree")
     def test_new_repo_tasks_dir(
@@ -211,4 +214,72 @@ class TestResolveTasksDir:
         result = resolve_tasks_dir(
             legacy_repo, "001-my-feature", require_healthy=False
         )
-        assert result == legacy_repo / "kitty-specs" / "001-my-feature" / "tasks"
+        assert (
+            result
+            == (legacy_repo / "kitty-specs").resolve() / "001-my-feature" / "tasks"
+        )
+
+
+# ============================================================================
+# Split / symlink / env-override legacy resolution (the 054 failure mode)
+# ============================================================================
+
+
+class TestLegacySplitResolution:
+    """A legacy repo whose canonical ``kitty-specs`` is stale while the real
+    feature specs live in a sibling ``spec-kitty/`` (or behind a symlink) must
+    still resolve to the tree that actually contains the feature. This is the
+    cascade that stranded dependent WPs: a missed feature → lanes never reach
+    ``done`` → dependent-base validation requires the pruned base worktree."""
+
+    def test_split_prefers_root_containing_feature(
+        self, legacy_repo: Path
+    ) -> None:
+        # Stale kitty-specs holds only an old feature; real specs in spec-kitty/.
+        (legacy_repo / "kitty-specs" / "051-old" / "tasks").mkdir(parents=True)
+        (legacy_repo / "spec-kitty" / "054-wizzard" / "tasks").mkdir(parents=True)
+        result = resolve_feature_dir(
+            legacy_repo, "054-wizzard", require_healthy=False
+        )
+        assert result == (legacy_repo / "spec-kitty").resolve() / "054-wizzard"
+
+    def test_kitty_specs_kept_when_it_has_the_feature(
+        self, legacy_repo: Path
+    ) -> None:
+        # When kitty-specs DOES contain the feature, prefer it over spec-kitty.
+        (legacy_repo / "kitty-specs" / "054-wizzard" / "tasks").mkdir(parents=True)
+        (legacy_repo / "spec-kitty" / "054-wizzard" / "tasks").mkdir(parents=True)
+        result = resolve_feature_dir(
+            legacy_repo, "054-wizzard", require_healthy=False
+        )
+        assert result == (legacy_repo / "kitty-specs").resolve() / "054-wizzard"
+
+    def test_kitty_specs_symlink_is_followed(self, legacy_repo: Path) -> None:
+        real = legacy_repo / "real-specs"
+        (real / "054-wizzard" / "tasks").mkdir(parents=True)
+        (legacy_repo / "kitty-specs").symlink_to(real)
+        result = resolve_feature_dir(
+            legacy_repo, "054-wizzard", require_healthy=False
+        )
+        assert (result / "tasks").is_dir()
+        assert result == real.resolve() / "054-wizzard"
+
+    def test_env_override_wins(
+        self, legacy_repo: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        external = legacy_repo / "elsewhere" / "specs"
+        (external / "054-wizzard" / "tasks").mkdir(parents=True)
+        (legacy_repo / "kitty-specs" / "054-wizzard").mkdir(parents=True)
+        monkeypatch.setenv("SPEC_KITTY_SPECS_ROOT", str(external))
+        result = resolve_spec_artifact_root(
+            legacy_repo, require_healthy=False, feature_slug="054-wizzard"
+        )
+        assert result == external.resolve()
+
+    def test_no_feature_slug_falls_back_to_kitty_specs(
+        self, legacy_repo: Path
+    ) -> None:
+        (legacy_repo / "kitty-specs").mkdir()
+        (legacy_repo / "spec-kitty").mkdir()
+        result = resolve_spec_artifact_root(legacy_repo, require_healthy=False)
+        assert result == (legacy_repo / "kitty-specs").resolve()

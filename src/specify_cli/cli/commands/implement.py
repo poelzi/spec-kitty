@@ -41,6 +41,10 @@ from specify_cli.core.feature_detection import (
     get_feature_target_branch,
 )
 from specify_cli.core.git_ops import get_current_branch, resolve_target_branch
+from specify_cli.core.spec_artifact_resolver import (
+    resolve_feature_dir,
+    resolve_tasks_dir,
+)
 from specify_cli.git import safe_commit
 
 console = Console()
@@ -129,7 +133,9 @@ def find_wp_file(repo_root: Path, feature_slug: str, wp_id: str) -> Path:
     Raises:
         FileNotFoundError: If WP file not found
     """
-    tasks_dir = repo_root / "kitty-specs" / feature_slug / "tasks"
+    tasks_dir = resolve_tasks_dir(
+        repo_root, feature_slug, require_healthy=False
+    )
     if not tasks_dir.exists():
         raise FileNotFoundError(f"Tasks directory not found: {tasks_dir}")
 
@@ -300,7 +306,9 @@ def check_for_dependents(
         feature_slug: Feature slug (e.g., "010-workspace-per-wp")
         wp_id: Work package ID (e.g., "WP01")
     """
-    feature_dir = repo_root / "kitty-specs" / feature_slug
+    feature_dir = resolve_feature_dir(
+        repo_root, feature_slug, require_healthy=False
+    )
 
     # Build dependency graph
     graph = build_dependency_graph(feature_dir)
@@ -601,7 +609,9 @@ def implement(
             # Check if all dependencies are done - suggest merge-first workflow
             from specify_cli.core.dependency_resolver import check_dependency_status
 
-            feature_dir = repo_root / "kitty-specs" / feature_slug
+            feature_dir = resolve_feature_dir(
+                repo_root, feature_slug, require_healthy=False
+            )
             dep_status = check_dependency_status(feature_dir, wp_id, declared_deps)
 
             if dep_status.should_suggest_merge_first and not force:
@@ -708,7 +718,9 @@ def implement(
     if base is None:  # Only for first WP in feature (branches from main)
         try:
             # Detect VCS backend early to use appropriate commands
-            feature_dir = repo_root / "kitty-specs" / feature_slug
+            feature_dir = resolve_feature_dir(
+                repo_root, feature_slug, require_healthy=False
+            )
             if not feature_dir.exists():
                 console.print(f"\n[red]Error:[/red] Feature directory not found: {feature_dir}")
                 console.print(f"Run /spec-kitty.specify first")
@@ -747,7 +759,9 @@ def implement(
 
         # Ensure VCS is locked in meta.json and get the backend to use
         # (do this early so we can use VCS for all operations)
-        feature_dir = repo_root / "kitty-specs" / feature_slug
+        feature_dir = resolve_feature_dir(
+            repo_root, feature_slug, require_healthy=False
+        )
         vcs_backend = _ensure_vcs_in_meta(feature_dir, repo_root)
 
         # Get VCS implementation

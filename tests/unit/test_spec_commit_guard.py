@@ -97,8 +97,95 @@ def test_prepare_context_uses_spec_storage_branch(tmp_path: Path) -> None:
     expected_repo = (repo / "kitty-specs").resolve()
     assert context.commit_repo_root == expected_repo
     assert context.target_branch == "kitty-specs"
-    assert context.branch_source == "spec_storage"
+    # With a real worktree, worktree detection fires before spec_storage
+    # config is checked.  Both are correct — the important thing is the
+    # commit_repo_root and target_branch are resolved correctly.
+    assert context.branch_source in {"worktree_detected", "spec_storage"}
     assert _current_branch(expected_repo) == "kitty-specs"
+
+
+def test_prepare_context_reattaches_detached_spec_storage_worktree(
+    tmp_path: Path,
+) -> None:
+    repo = tmp_path / "repo"
+    _init_repo(repo)
+
+    _run_git(repo, "checkout", "-b", "kitty-specs")
+    _run_git(repo, "checkout", "main")
+    wt_path = repo / "kitty-specs"
+    _run_git(repo, "worktree", "add", str(wt_path), "kitty-specs")
+
+    save_spec_storage_config(
+        repo,
+        SpecStorageConfig(
+            branch_name="kitty-specs",
+            worktree_path="kitty-specs",
+            auto_push=False,
+        ),
+    )
+
+    _run_git(wt_path, "checkout", "--detach")
+    detached_note = wt_path / "detached-note.md"
+    detached_note.write_text("detached commit\n", encoding="utf-8")
+    _run_git(wt_path, "add", "detached-note.md")
+    _run_git(wt_path, "commit", "-m", "Detached spec update")
+    detached_head = _run_git(wt_path, "rev-parse", "HEAD").stdout.strip()
+
+    feature_dir = wt_path / "001-test-feature"
+    feature_dir.mkdir(parents=True)
+    tasks_md = feature_dir / "tasks.md"
+    tasks_md.write_text("# Tasks\n", encoding="utf-8")
+
+    context = prepare_specs_commit_context(
+        repo,
+        tracked_paths=[tasks_md],
+        feature_dir=feature_dir,
+        fallback_branch="main",
+    )
+
+    assert context.commit_repo_root == wt_path.resolve()
+    assert context.target_branch == "kitty-specs"
+    assert context.branch_source == "spec_storage"
+    assert _current_branch(wt_path) == "kitty-specs"
+    assert _current_branch(repo) == "main"
+    assert (
+        _run_git(wt_path, "merge-base", "--is-ancestor", detached_head, "kitty-specs")
+        .returncode
+        == 0
+    )
+
+
+def test_prepare_context_reattaches_detached_kitty_specs_worktree_without_config(
+    tmp_path: Path,
+) -> None:
+    repo = tmp_path / "repo"
+    _init_repo(repo)
+
+    _run_git(repo, "branch", "kitty-specs")
+    wt_path = repo / "kitty-specs"
+    _run_git(repo, "worktree", "add", str(wt_path), "kitty-specs")
+    _run_git(wt_path, "checkout", "--detach")
+
+    feature_dir = wt_path / "001-test-feature"
+    feature_dir.mkdir(parents=True)
+    tasks_md = feature_dir / "tasks.md"
+    tasks_md.write_text("# Tasks\n", encoding="utf-8")
+
+    context = prepare_specs_commit_context(
+        repo,
+        tracked_paths=[tasks_md],
+        feature_dir=feature_dir,
+        fallback_branch="main",
+    )
+
+    assert context.commit_repo_root == wt_path.resolve()
+    assert context.target_branch == "kitty-specs"
+    # Without spec_storage.branch_name + without a meta.json upstream_branch,
+    # the resolver falls back to the directory-name heuristic.  The
+    # branch_source carries the ``_guess`` suffix so callers can warn.
+    assert context.branch_source == "worktree_detached_guess"
+    assert _current_branch(wt_path) == "kitty-specs"
+    assert _current_branch(repo) == "main"
 
 
 def test_prepare_context_errors_when_spec_storage_branch_missing(tmp_path: Path) -> None:

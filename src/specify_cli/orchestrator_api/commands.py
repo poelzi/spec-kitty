@@ -74,7 +74,11 @@ def _get_main_repo_root() -> Path:
 
 
 def _resolve_feature_dir(main_repo_root: Path, feature_slug: str) -> Path | None:
-    feature_dir = main_repo_root / "kitty-specs" / feature_slug
+    from specify_cli.core.spec_artifact_resolver import resolve_feature_dir
+
+    feature_dir = resolve_feature_dir(
+        main_repo_root, feature_slug, require_healthy=False
+    )
     if not feature_dir.is_dir():
         return None
     return feature_dir

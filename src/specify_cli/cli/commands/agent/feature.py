@@ -29,8 +29,10 @@ from specify_cli.core.spec_commit_guard import (
     SpecCommitContext,
     ensure_branch_checked_out,
     prepare_specs_commit_context,
+    resolve_specs_repo_and_branch,
     to_repo_relative_path,
 )
+from specify_cli.core.spec_storage_config import has_spec_storage_config
 from specify_cli.core.feature_detection import (
     detect_feature_directory,
     FeatureDetectionError,
@@ -209,6 +211,9 @@ def create_feature(
         spec-kitty agent create-feature "new-dashboard" --json
         spec-kitty agent create-feature "nats-transport" --upstream-branch 001-otel --json
     """
+    repo_root: Path | None = None
+    original_branch: str | None = None
+    restore_original_branch = False
     try:
         # GUARD: Refuse to run from inside a worktree (must be in planning repo)
         cwd = Path.cwd().resolve()
@@ -268,10 +273,12 @@ def create_feature(
             else:
                 console.print(f"[red]Error:[/red] {error_msg}")
             raise typer.Exit(1)
+        original_branch = current_branch
         planning_branch = upstream_branch or current_branch
 
-        # If an explicit planning/base branch is provided, ensure it exists and
-        # switch to it before creating/committing planning artifacts.
+        # If an explicit planning/base branch is provided, ensure it exists.
+        # Legacy in-tree specs still need a temporary checkout; spec_storage
+        # writes happen in the separate spec worktree and do not need it.
         if planning_branch != current_branch:
             branch_exists = subprocess.run(
                 ["git", "rev-parse", "--verify", planning_branch],
@@ -291,23 +298,25 @@ def create_feature(
                     console.print(f"[red]Error:[/red] {error_msg}")
                 raise typer.Exit(1)
 
-            checkout_result = subprocess.run(
-                ["git", "checkout", planning_branch],
-                cwd=repo_root,
-                capture_output=True,
-                text=True,
-                check=False,
-            )
-            if checkout_result.returncode != 0:
-                error_msg = (
-                    f"Could not checkout planning/base branch '{planning_branch}': "
-                    f"{checkout_result.stderr or checkout_result.stdout}"
+            if not has_spec_storage_config(repo_root):
+                checkout_result = subprocess.run(
+                    ["git", "checkout", planning_branch],
+                    cwd=repo_root,
+                    capture_output=True,
+                    text=True,
+                    check=False,
                 )
-                if json_output:
-                    print(json.dumps({"error": error_msg}))
-                else:
-                    console.print(f"[red]Error:[/red] {error_msg}")
-                raise typer.Exit(1)
+                if checkout_result.returncode != 0:
+                    error_msg = (
+                        f"Could not checkout planning/base branch '{planning_branch}': "
+                        f"{checkout_result.stderr or checkout_result.stdout}"
+                    )
+                    if json_output:
+                        print(json.dumps({"error": error_msg}))
+                    else:
+                        console.print(f"[red]Error:[/red] {error_msg}")
+                    raise typer.Exit(1)
+                restore_original_branch = True
 
             if not json_output:
                 console.print(
@@ -317,6 +326,11 @@ def create_feature(
         # Get next feature number
         feature_number = get_next_feature_number(repo_root)
         feature_slug_formatted = f"{feature_number:03d}-{feature_slug}"
+
+        if has_spec_storage_config(repo_root):
+            spec_commit_context = resolve_specs_repo_and_branch(repo_root)
+            if spec_commit_context.commit_repo_root.resolve() != repo_root.resolve():
+                ensure_branch_checked_out(spec_commit_context)
 
         # Create feature directory in main repo
         feature_dir = repo_root / "kitty-specs" / feature_slug_formatted
@@ -516,6 +530,22 @@ spec-kitty agent tasks move-task WP01 --to doing
         else:
             console.print(f"[red]Error:[/red] {e}")
         raise typer.Exit(1)
+    finally:
+        if restore_original_branch and repo_root is not None and original_branch:
+            current_after = get_current_branch(repo_root)
+            if current_after and current_after != original_branch:
+                restore_result = subprocess.run(
+                    ["git", "checkout", original_branch],
+                    cwd=repo_root,
+                    capture_output=True,
+                    text=True,
+                    check=False,
+                )
+                if restore_result.returncode != 0 and not json_output:
+                    console.print(
+                        f"[yellow]Warning:[/yellow] Could not restore branch '{original_branch}': "
+                        f"{restore_result.stderr or restore_result.stdout}"
+                    )
 
 
 @app.command(name="check-prerequisites")

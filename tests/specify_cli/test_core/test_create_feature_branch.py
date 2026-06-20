@@ -196,11 +196,20 @@ def test_create_feature_with_explicit_upstream_branch_flag(tmp_path, monkeypatch
     result = runner.invoke(app, ["create-feature", "test-feature", "--json", "--upstream-branch", "2.x"])
 
     assert result.exit_code == 0, f"Command failed: {result.output}"
-    slugs = _get_feature_slugs(repo)
-    assert len(slugs) == 1
-    meta = _read_meta(repo, slugs[0])
+    payload = json.loads(result.output)
+    feature_slug = payload["feature"]
+    _, meta_json, _ = run_command(
+        ["git", "show", f"2.x:kitty-specs/{feature_slug}/meta.json"],
+        cwd=repo,
+        capture=True,
+    )
+    meta = json.loads(meta_json)
     assert meta["upstream_branch"] == "2.x"
-    assert meta["target_branch"] == slugs[0]
+    assert meta["target_branch"] == feature_slug
+    _, current_branch, _ = run_command(
+        ["git", "branch", "--show-current"], cwd=repo, capture=True
+    )
+    assert current_branch == "main"
 
 
 @pytest.mark.usefixtures("_git_identity")

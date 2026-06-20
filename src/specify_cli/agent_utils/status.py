@@ -61,8 +61,13 @@ def show_kanban_status(feature_slug: Optional[str] = None) -> dict:
         # Get main repo root for correct path resolution
         main_repo_root = get_main_repo_root(repo_root)
 
-        # Locate feature directory
-        feature_dir = main_repo_root / "kitty-specs" / feature_slug
+        # Locate feature directory (centralized resolver: handles a
+        # stale/symlinked/split kitty-specs vs sibling spec-kitty layout).
+        from specify_cli.core.spec_artifact_resolver import resolve_feature_dir
+
+        feature_dir = resolve_feature_dir(
+            main_repo_root, feature_slug, require_healthy=False
+        )
 
         if not feature_dir.exists():
             console.print(f"[red]Error:[/red] Feature directory not found: {feature_dir}")

@@ -25,15 +25,24 @@ from specify_cli.core.feature_detection import (
     get_feature_upstream_branch,
     get_feature_target_branch,
 )
+from specify_cli.core.git_ops import is_git_repo
 from specify_cli.core.paths import (
     get_main_repo_root,
     is_worktree_context,
     locate_project_root,
 )
 from specify_cli.core.spec_commit_guard import (
+    ensure_branch_checked_out,
     prepare_specs_commit_context,
+    resolve_specs_repo_and_branch,
     to_repo_relative_path,
 )
+from specify_cli.core.spec_artifact_resolver import (
+    resolve_feature_dir,
+    resolve_tasks_dir,
+)
+from specify_cli.core.spec_lock import LockTimeoutError, kitty_specs_lock
+from specify_cli.git.commit_helpers import safe_commit
 from specify_cli.mission import get_feature_mission_key
 
 
@@ -88,11 +97,27 @@ def _ensure_target_branch_checked_out(
 ) -> tuple[Path, str]:
     """Resolve branch for planning changes without auto-checkout.
 
+    Uses the unified ``resolve_specs_repo_and_branch`` helper from
+    ``spec_commit_guard`` to detect worktrees, spec-storage configs,
+    and meta.json branch settings.
+
+    Always returns the **main** repo root (for building ``kitty-specs/``
+    paths).  Commit routing to worktrees is handled separately at each
+    commit site via ``resolve_specs_repo_and_branch``.
+
     Returns:
         (main_repo_root, commit_branch)
     """
     main_repo_root = get_main_repo_root(repo_root)
+    context = resolve_specs_repo_and_branch(main_repo_root, feature_slug)
 
+    if context.commit_repo_root.resolve() != main_repo_root.resolve():
+        # kitty-specs is a separate worktree/submodule. Do not checkout the
+        # main repo; commit sites prepare the spec repo before writing.
+        return main_repo_root, context.target_branch
+
+    # For non-worktree setups, preserve existing behaviour: do NOT
+    # auto-checkout, just warn if current branch differs from target.
     current_branch_result = subprocess.run(
         ["git", "rev-parse", "--abbrev-ref", "HEAD"],
         cwd=main_repo_root,
@@ -109,26 +134,10 @@ def _ensure_target_branch_checked_out(
             "Planning repo is in detached HEAD state; checkout a branch before continuing"
         )
 
-    # Prefer explicit upstream_branch in meta.json for planning artifacts,
-    # falling back to target_branch for legacy features, then current branch.
-    # Planning artifacts (kitty-specs/) must stay on the upstream branch (e.g., main),
-    # NOT on the landing branch (which is target_branch in v0.15.0+).
-    planning_branch = None
-    meta_file = main_repo_root / "kitty-specs" / feature_slug / "meta.json"
-    if meta_file.exists():
-        try:
-            meta = json.loads(meta_file.read_text(encoding="utf-8"))
-            # Use upstream_branch for planning (v0.15.0+), fall back to target_branch for legacy
-            planning_branch = meta.get("upstream_branch") or meta.get("target_branch")
-        except (json.JSONDecodeError, OSError):
-            planning_branch = None
-
-    target_branch = planning_branch or current_branch
-
-    if current_branch != target_branch and not json_output:
+    if current_branch != context.target_branch and not json_output:
         console.print(
             f"[yellow]Note:[/yellow] You are on '{current_branch}', feature planning branch is "
-            f"'{target_branch}'. Status changes will commit to '{current_branch}'."
+            f"'{context.target_branch}'. Status changes will commit to '{current_branch}'."
         )
 
     return main_repo_root, current_branch
@@ -324,7 +333,9 @@ def _check_unchecked_subtasks(
     """
     # Use planning repo root (worktrees have kitty-specs/ sparse-checked out)
     main_repo_root = get_main_repo_root(repo_root)
-    feature_dir = main_repo_root / "kitty-specs" / feature_slug
+    feature_dir = resolve_feature_dir(
+        main_repo_root, feature_slug, require_healthy=False
+    )
     tasks_md = feature_dir / "tasks.md"
 
     if not tasks_md.exists():
@@ -384,7 +395,9 @@ def _check_dependent_warnings(
 
     # Use planning repo root (worktrees have kitty-specs/ sparse-checked out)
     main_repo_root = get_main_repo_root(repo_root)
-    feature_dir = main_repo_root / "kitty-specs" / feature_slug
+    feature_dir = resolve_feature_dir(
+        main_repo_root, feature_slug, require_healthy=False
+    )
 
     # Build dependency graph
     try:
@@ -494,7 +507,9 @@ def _auto_rebase_worktree_if_needed(
     """
     guidance: List[str] = []
     main_repo_root = get_main_repo_root(repo_root)
-    feature_dir = main_repo_root / "kitty-specs" / feature_slug
+    feature_dir = resolve_feature_dir(
+        main_repo_root, feature_slug, require_healthy=False
+    )
 
     if get_feature_mission_key(feature_dir) != "software-dev":
         return True, [], False
@@ -532,6 +547,25 @@ def _auto_rebase_worktree_if_needed(
 
     # Status/planning-only deltas are already safe to ignore.
     if _behind_commits_touch_only_planning_artifacts(worktree_path, check_branch, feature_slug):
+        return True, [], False
+
+    # Content-equivalence shortcut: if the WP worktree's tree already matches
+    # the base branch's tree, the "behind" count is purely an SHA divergence
+    # (e.g. the base branch was rebased and the WP has been merged through a
+    # non-WP path).  No rebase is necessary; the auto-rebase would be a no-op
+    # at best and a needless conflict source at worst.  Skip silently — the
+    # caller's existing follow-up flow handles the transition.
+    diff_result = subprocess.run(
+        ["git", "diff", "--quiet", f"HEAD..{check_branch}"],
+        cwd=worktree_path,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        check=False,
+    )
+    if diff_result.returncode == 0:
+        # ``git diff --quiet`` exits 0 when there are no differences.
         return True, [], False
 
     # Don't attempt rebase in invalid git states.
@@ -662,7 +696,9 @@ def _validate_ready_for_review(
 
     guidance: List[str] = []
     main_repo_root = get_main_repo_root(repo_root)
-    feature_dir = main_repo_root / "kitty-specs" / feature_slug
+    feature_dir = resolve_feature_dir(
+        main_repo_root, feature_slug, require_healthy=False
+    )
 
     # Detect mission type from feature's meta.json
     mission_key = get_feature_mission_key(feature_dir)
@@ -1349,61 +1385,120 @@ def move_task(
                 feature_slug.split("-")[0] if "-" in feature_slug else feature_slug
             )
 
-            # Commit to target branch (file is always in planning repo, worktrees excluded via sparse-checkout)
+            # Commit to the correct repo — may be a kitty-specs worktree
+            # instead of the main repo when kitty-specs/ is a separate git repo.
             commit_msg = f"chore: Move {task_id} to {target_lane} on spec {spec_number}"
             if agent_name != "unknown":
                 commit_msg += f" [{agent_name}]"
 
+            original_doc = wp.path.read_text(encoding="utf-8") if wp.path.exists() else None
+            # Resolve the prospective lock target before the commit context so
+            # that concurrent invocations on the same kitty-specs worktree
+            # serialise even before resolution.  Falls back to the main repo
+            # when no kitty-specs/ worktree is present (also a valid commit
+            # target in that case).
+            prospective_specs_dir = main_repo_root / "kitty-specs"
+            lock_target = (
+                prospective_specs_dir
+                if prospective_specs_dir.exists()
+                else main_repo_root
+            )
             try:
-                # wp.path already points to planning repo's kitty-specs/ (absolute path)
-                # Worktrees use sparse-checkout to exclude kitty-specs/, so path is always to planning repo
-                actual_file_path = wp.path.resolve()
+                with kitty_specs_lock(lock_target):
+                    # Resolve the actual git repo containing the WP file.
+                    # When kitty-specs/ is a worktree/submodule, this returns
+                    # the worktree root instead of the main repo root.
+                    commit_context = resolve_specs_repo_and_branch(main_repo_root, feature_slug)
+                    commit_repo = commit_context.commit_repo_root
+                    if commit_repo.resolve() != main_repo_root.resolve():
+                        ensure_branch_checked_out(commit_context)
 
-                # Write file AFTER ensuring target branch
-                wp.path.write_text(updated_doc, encoding="utf-8")
-                file_written = True
-
-                # Stage and commit the file
-                subprocess.run(
-                    ["git", "add", str(actual_file_path)],
-                    cwd=main_repo_root,
-                    capture_output=True,
-                    text=True,
-                    check=False,
-                )
-
-                commit_result = subprocess.run(
-                    ["git", "commit", "--no-verify", "-m", commit_msg],
-                    cwd=main_repo_root,
-                    capture_output=True,
-                    text=True,
-                    check=False,
-                )
-
-                if commit_result.returncode == 0:
-                    if not json_output:
-                        console.print(
-                            f"[cyan]→ Committed status change to {target_branch} branch[/cyan]"
+                    committed_to_git = is_git_repo(commit_repo)
+                    if not committed_to_git:
+                        wp.path.write_text(updated_doc, encoding="utf-8")
+                        file_written = True
+                        if not json_output:
+                            console.print(
+                                "[yellow]Warning:[/yellow] No git repository detected. Skipping auto-commit."
+                            )
+                        commit_success = True
+                    else:
+                        # Capture the head oid right after ensuring the
+                        # branch so safe_commit can detect a concurrent
+                        # commit that lands between here and our commit.
+                        parent_oid_result = subprocess.run(
+                            ["git", "rev-parse", "HEAD"],
+                            cwd=commit_repo,
+                            capture_output=True,
+                            text=True,
+                            check=False,
                         )
-                elif (
-                    "nothing to commit" in commit_result.stdout
-                    or "nothing to commit" in commit_result.stderr
-                ):
-                    # File wasn't actually changed, that's OK
-                    pass
+                        expected_parent = (
+                            parent_oid_result.stdout.strip()
+                            if parent_oid_result.returncode == 0
+                            else None
+                        )
+
+                        # Only enforce the branch-equality check when we
+                        # actually called ensure_branch_checked_out (i.e.
+                        # commit_repo differs from main_repo_root).  When
+                        # they're equal we trust the user's current branch
+                        # — the resolver's target_branch is only a hint in
+                        # that path (the user may legitimately be on a
+                        # different branch than the feature's planning
+                        # branch).
+                        expected_branch_hint: str | None = None
+                        if commit_repo.resolve() != main_repo_root.resolve():
+                            expected_branch_hint = commit_context.target_branch
+
+                        # Write file AFTER ensuring target branch
+                        wp.path.write_text(updated_doc, encoding="utf-8")
+                        file_written = True
+
+                        commit_success = safe_commit(
+                            repo_path=commit_repo,
+                            files_to_commit=[wp.path.resolve()],
+                            commit_message=commit_msg,
+                            allow_empty=True,
+                            no_verify=True,
+                            expected_branch=expected_branch_hint,
+                            expected_parent_oid=expected_parent,
+                        )
+
+                if commit_success:
+                    if committed_to_git and not json_output:
+                        console.print(
+                            f"[cyan]→ Committed status change to {commit_context.target_branch} branch[/cyan]"
+                        )
                 else:
-                    # Commit failed
-                    if not json_output:
-                        console.print(
-                            f"[yellow]Warning:[/yellow] Failed to auto-commit: {commit_result.stderr}"
-                        )
+                    if original_doc is None:
+                        try:
+                            wp.path.unlink()
+                        except FileNotFoundError:
+                            pass
+                    else:
+                        wp.path.write_text(original_doc, encoding="utf-8")
+                    raise RuntimeError(f"Failed to auto-commit status change for {task_id}")
 
+            except LockTimeoutError as e:
+                # Nothing is written before the lock is held, so no rollback is
+                # needed — surface a clear, actionable message instead of the
+                # generic failure below.
+                raise RuntimeError(
+                    f"Timed out acquiring the kitty-specs lock while moving "
+                    f"{task_id}: {e}. Another spec-kitty process may be holding "
+                    f"it; retry shortly."
+                ) from e
             except Exception as e:
-                # Unexpected error (e.g., not in a git repo) - ensure file gets written
-                if not file_written:
-                    wp.path.write_text(updated_doc, encoding="utf-8")
-                if not json_output:
-                    console.print(f"[yellow]Warning:[/yellow] Auto-commit skipped: {e}")
+                if file_written:
+                    if original_doc is None:
+                        try:
+                            wp.path.unlink()
+                        except FileNotFoundError:
+                            pass
+                    else:
+                        wp.path.write_text(original_doc, encoding="utf-8")
+                raise RuntimeError(f"Auto-commit failed: {e}") from e
         else:
             # No auto-commit - just write the file
             wp.path.write_text(updated_doc, encoding="utf-8")
@@ -1497,7 +1592,9 @@ def mark_status(
         main_repo_root, target_branch = _ensure_target_branch_checked_out(
             repo_root, feature_slug, json_output
         )
-        feature_dir = main_repo_root / "kitty-specs" / feature_slug
+        feature_dir = resolve_feature_dir(
+            main_repo_root, feature_slug, require_healthy=False
+        )
         tasks_md = feature_dir / "tasks.md"
         new_checkbox = "[x]" if status == "done" else "[ ]"
 
@@ -1729,7 +1826,9 @@ def list_tasks(
         )
 
         # Find all task files
-        tasks_dir = main_repo_root / "kitty-specs" / feature_slug / "tasks"
+        tasks_dir = resolve_tasks_dir(
+            main_repo_root, feature_slug, require_healthy=False
+        )
         if not tasks_dir.exists():
             _output_error(json_output, f"Tasks directory not found: {tasks_dir}")
             raise typer.Exit(1)
@@ -1884,7 +1983,9 @@ def finalize_tasks(
         main_repo_root, _ = _ensure_target_branch_checked_out(
             repo_root, feature_slug, json_output
         )
-        feature_dir = main_repo_root / "kitty-specs" / feature_slug
+        feature_dir = resolve_feature_dir(
+            main_repo_root, feature_slug, require_healthy=False
+        )
         tasks_md = feature_dir / "tasks.md"
         tasks_dir = feature_dir / "tasks"
 
@@ -2141,7 +2242,9 @@ def status(
         )
 
         # Locate feature directory
-        feature_dir = main_repo_root / "kitty-specs" / feature_slug
+        feature_dir = resolve_feature_dir(
+            main_repo_root, feature_slug, require_healthy=False
+        )
 
         if not feature_dir.exists():
             console.print(
@@ -2587,7 +2690,9 @@ def list_dependents(
         main_repo_root, _ = _ensure_target_branch_checked_out(
             repo_root, feature_slug, json_output
         )
-        feature_dir = main_repo_root / "kitty-specs" / feature_slug
+        feature_dir = resolve_feature_dir(
+            main_repo_root, feature_slug, require_healthy=False
+        )
 
         if not feature_dir.exists():
             _output_error(json_output, f"Feature directory not found: {feature_dir}")

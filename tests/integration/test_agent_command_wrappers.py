@@ -15,10 +15,10 @@ import typer
 
 from specify_cli.cli.commands.agent.workflow import (
     _find_first_planned_wp,
-    _resolve_git_repo_root_for_path,
     implement as agent_implement,
     review as agent_review,
 )
+from specify_cli.core.spec_commit_guard import resolve_specs_repo_and_branch
 
 
 class TestAgentWorkflowImplement:
@@ -508,6 +508,7 @@ class TestAgentWorkflowImplement:
         captured = capsys.readouterr()
         assert "Failed to commit workflow status update for WP01" in captured.out
         assert "✓ Claimed WP01" not in captured.out
+        assert "lane: planned" in wp_file.read_text(encoding="utf-8")
 
     def test_review_aborts_when_status_claim_commit_fails(self, mock_repo, capsys):
         """Workflow review must fail loudly when status commit fails."""
@@ -548,43 +549,62 @@ class TestAgentWorkflowImplement:
         captured = capsys.readouterr()
         assert "Failed to commit workflow status update for WP01" in captured.out
         assert "✓ Claimed WP01 for review" not in captured.out
+        assert "lane: for_review" in wp_file.read_text(encoding="utf-8")
 
 
 class TestWorkflowStatusCommitRepoResolution:
-    """Regression tests for workflow status commit repo selection."""
+    """Regression tests for workflow status commit repo selection.
 
-    def test_resolve_git_repo_root_for_path_uses_containing_repo(
-        self, tmp_path: Path
-    ):
-        """When git can resolve a top-level, use that repo root."""
-        fallback_repo = tmp_path / "fallback"
-        fallback_repo.mkdir()
-        wp_file = tmp_path / "kitty-specs" / "001-test-feature" / "tasks" / "WP01.md"
-        wp_file.parent.mkdir(parents=True)
-        wp_file.write_text("placeholder", encoding="utf-8")
+    Tests the unified ``resolve_specs_repo_and_branch`` helper that replaced
+    the per-module ``_resolve_git_repo_root_for_path``.
+    """
 
-        with patch("subprocess.run") as mock_run:
-            mock_run.return_value = MagicMock(
-                returncode=0,
-                stdout=str(tmp_path / "kitty-specs") + "\n",
-            )
-            resolved = _resolve_git_repo_root_for_path(wp_file, fallback_repo)
+    def test_resolve_specs_detects_kitty_specs_worktree(self, tmp_path: Path):
+        """When kitty-specs/ is a git worktree, resolve to that repo."""
+        repo = tmp_path / "repo"
+        repo.mkdir()
 
-        assert resolved == (tmp_path / "kitty-specs").resolve()
+        # Set up main repo
+        subprocess.run(["git", "init", "-b", "main"], cwd=repo, check=True, capture_output=True)
+        subprocess.run(["git", "config", "user.name", "Test"], cwd=repo, check=True, capture_output=True)
+        subprocess.run(["git", "config", "user.email", "test@test.com"], cwd=repo, check=True, capture_output=True)
+        (repo / "README.md").write_text("# Test\n", encoding="utf-8")
+        subprocess.run(["git", "add", "."], cwd=repo, check=True, capture_output=True)
+        subprocess.run(["git", "commit", "-m", "Initial"], cwd=repo, check=True, capture_output=True)
 
-    def test_resolve_git_repo_root_for_path_falls_back_when_git_lookup_fails(
-        self, tmp_path: Path
-    ):
-        """When git lookup fails, keep the provided fallback repo root."""
-        fallback_repo = tmp_path / "fallback"
-        fallback_repo.mkdir()
-        wp_file = tmp_path / "missing" / "WP01.md"
+        # Create kitty-specs branch and worktree
+        subprocess.run(["git", "branch", "kitty-specs"], cwd=repo, check=True, capture_output=True)
+        subprocess.run(
+            ["git", "worktree", "add", str(repo / "kitty-specs"), "kitty-specs"],
+            cwd=repo, check=True, capture_output=True,
+        )
 
-        with patch("subprocess.run") as mock_run:
-            mock_run.return_value = MagicMock(returncode=1, stdout="", stderr="fatal")
-            resolved = _resolve_git_repo_root_for_path(wp_file, fallback_repo)
+        context = resolve_specs_repo_and_branch(repo, "001-test-feature")
 
-        assert resolved == fallback_repo
+        assert context.commit_repo_root == (repo / "kitty-specs").resolve()
+        assert context.target_branch == "kitty-specs"
+        assert context.branch_source == "worktree_detected"
+
+    def test_resolve_specs_falls_back_to_main_repo(self, tmp_path: Path):
+        """When kitty-specs/ is a regular directory, use main repo."""
+        repo = tmp_path / "repo"
+        repo.mkdir()
+
+        subprocess.run(["git", "init", "-b", "main"], cwd=repo, check=True, capture_output=True)
+        subprocess.run(["git", "config", "user.name", "Test"], cwd=repo, check=True, capture_output=True)
+        subprocess.run(["git", "config", "user.email", "test@test.com"], cwd=repo, check=True, capture_output=True)
+        (repo / "README.md").write_text("# Test\n", encoding="utf-8")
+        subprocess.run(["git", "add", "."], cwd=repo, check=True, capture_output=True)
+        subprocess.run(["git", "commit", "-m", "Initial"], cwd=repo, check=True, capture_output=True)
+
+        # kitty-specs is just a regular subdirectory
+        (repo / "kitty-specs").mkdir()
+
+        context = resolve_specs_repo_and_branch(repo, "001-test-feature")
+
+        assert context.commit_repo_root == repo.resolve()
+        assert context.target_branch == "main"
+        assert context.branch_source == "current_branch"
 
 
 class TestAgentFeatureAccept:
